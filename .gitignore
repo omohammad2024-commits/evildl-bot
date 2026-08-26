@@ -1,6 +1,7 @@
 # ── Secrets & credentials — NEVER commit ──────────────────────────────
 .env
 .env.*
+!.env.example
 *.session
 user_session.txt
 data/cookies/
