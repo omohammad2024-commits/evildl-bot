@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Downloader · Dashboard</title>
+<link rel="stylesheet" href="/static/app.css">
+
+<!-- PWA: installable on phone home screen like a native app -->
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#0e1422">
+<meta name="mobile-web-app-capable" content="yes">
+<!-- iOS standalone support -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Downloader">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32.png">
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar (becomes bottom nav on mobile via CSS) -->
+  <aside class="side">
+    <div class="brand"><span class="brand-logo">🎬</span><span class="brand-txt">Downloader</span></div>
+    <nav id="nav">
+      <a data-view="overview" class="active">📊 <span>Overview</span></a>
+      <a data-view="analytics">📈 <span>Analytics</span></a>
+      <a data-view="users">👥 <span>Users</span></a>
+      <a data-view="platforms">🎛 <span>Platforms</span></a>
+      <a data-view="cookies">🍪 <span>Cookies</span></a>
+      <a data-view="channels">🔒 <span>Forced join</span></a>
+      <a data-view="broadcast">📢 <span>Broadcast</span></a>
+      <a data-view="logs">📜 <span>Live logs</span></a>
+      <a data-view="control">⚙️ <span>Control</span></a>
+    </nav>
+    <div class="side-foot">
+      <div class="pulse" id="pulse">● connecting…</div>
+      <a href="/logout" class="logout">⎋ Sign out</a>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <header class="topbar">
+      <div class="tb-title" id="viewTitle">Overview</div>
+      <div class="tb-right">
+        <span class="uptime" id="uptime">—</span>
+        <button class="refresh" id="refreshBtn" title="Refresh">⟳</button>
+      </div>
+    </header>
+
+    <section class="content" id="content"><div class="loading">Loading…</div></section>
+  </main>
+
+  <!-- Mobile bottom navigation (shown only on small screens) -->
+  <nav class="mobnav" id="mobnav">
+    <a data-view="overview" class="active"><span class="mi">📊</span><span class="ml">Home</span></a>
+    <a data-view="analytics"><span class="mi">📈</span><span class="ml">Stats</span></a>
+    <a data-view="users"><span class="mi">👥</span><span class="ml">Users</span></a>
+    <a data-view="logs"><span class="mi">📜</span><span class="ml">Logs</span></a>
+    <a data-view="control"><span class="mi">⚙️</span><span class="ml">More</span></a>
+  </nav>
+</div>
+
+<!-- Install-to-home-screen banner (Android/desktop beforeinstallprompt) -->
+<div class="installbar" id="installbar">
+  <span>📲 نصب داشبورد روی گوشی</span>
+  <div>
+    <button id="installBtn">نصب</button>
+    <button id="installClose" class="ghost">بعداً</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/static/app.js"></script>
+<script>
+  // Register the service worker (required for installability).
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    });
+  }
+  // Custom install prompt (Android/Chrome/Edge desktop).
+  let deferredPrompt = null;
+  const bar = document.getElementById("installbar");
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    if (!localStorage.getItem("installDismissed")) bar.classList.add("show");
+  });
+  document.getElementById("installBtn").onclick = async () => {
+    bar.classList.remove("show");
+    if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt = null; }
+  };
+  document.getElementById("installClose").onclick = () => {
+    bar.classList.remove("show");
+    localStorage.setItem("installDismissed", "1");
+  };
+  window.addEventListener("appinstalled", () => bar.classList.remove("show"));
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "build": {"builder": "heroku"},
+  "deploy": {
+    "startCommand": "python -m bot.main",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 3
+  }
+}

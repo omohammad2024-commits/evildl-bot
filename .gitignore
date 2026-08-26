@@ -1,0 +1,27 @@
+# ── Secrets & credentials — NEVER commit ──────────────────────────────
+.env
+.env.*
+*.session
+user_session.txt
+data/cookies/
+*.pem
+*.key
+
+# ── Runtime data & state (per-deployment, not source) ─────────────────
+data/
+logs/
+run/
+data/_old_sessions/
+
+# ── Python ────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# ── Build / misc ──────────────────────────────────────────────────────
+dist/
+build/
+*.log

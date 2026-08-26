@@ -1,0 +1,35 @@
+# Pinned to what is actually running in production (pip freeze verified).
+
+# ── Telegram ──────────────────────────────────────────────────────────
+python-telegram-bot[job-queue]==20.7
+APScheduler==3.10.4
+Telethon==1.44.0
+
+# ── Downloader core ───────────────────────────────────────────────────
+# curl_cffi powers yt-dlp's browser impersonation (IMPERSONATE_CHAIN). Without
+# it every YouTube link fails with "Impersonate target ... is not available".
+yt-dlp[default,curl-cffi]==2026.8.19
+curl_cffi==0.16.1
+# PO-token provider plugin — pairs with the bgutil node server (see Dockerfile).
+bgutil-ytdlp-pot-provider==1.3.2
+
+# ── HTTP / scraping ───────────────────────────────────────────────────
+requests==2.34.2
+httpx==0.25.2
+beautifulsoup4==4.15.0
+lxml==6.1.2
+
+# ── Media / storage ───────────────────────────────────────────────────
+Pillow==12.3.0
+aiofiles==25.1.0
+aiosqlite==0.22.1
+
+# ── Web dashboard ─────────────────────────────────────────────────────
+fastapi==0.109.2
+uvicorn[standard]==0.27.1
+jinja2==3.1.3
+python-multipart==0.0.9
+itsdangerous==2.1.2
+
+# ── Config ────────────────────────────────────────────────────────────
+python-dotenv==1.2.3

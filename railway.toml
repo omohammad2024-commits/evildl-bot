@@ -1,0 +1,11 @@
+# Railway build/deploy config.
+# Uses the Dockerfile (not Nixpacks) so Node 22, ffmpeg, and the PO-token
+# server are all present — Nixpacks can't express that combination cleanly.
+
+[build]
+builder = "dockerfile"
+
+[deploy]
+startCommand = "bash start.sh"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10

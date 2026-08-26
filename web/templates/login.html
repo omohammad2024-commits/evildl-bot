@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Downloader · Sign in</title>
+<style>
+  :root{
+    --bg:#070a12; --panel:#0e1422; --panel2:#141c2e; --line:#1f2a40;
+    --txt:#e8edf7; --mut:#7d8aa5; --acc:#5b8cff; --acc2:#7b5bff;
+    --glow:0 0 40px rgba(91,140,255,.35);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+    background:radial-gradient(1200px 600px at 20% -10%,#1a2544 0%,transparent 55%),
+               radial-gradient(1000px 500px at 100% 100%,#241a44 0%,transparent 50%),
+               var(--bg);
+    color:var(--txt);display:grid;place-items:center;overflow:hidden;
+  }
+  .orb{position:fixed;border-radius:50%;filter:blur(80px);opacity:.5;z-index:0}
+  .orb.a{width:420px;height:420px;background:#2b4bff;top:-120px;left:-100px;animation:f1 14s ease-in-out infinite}
+  .orb.b{width:380px;height:380px;background:#7b2bff;bottom:-120px;right:-80px;animation:f2 18s ease-in-out infinite}
+  @keyframes f1{50%{transform:translate(60px,40px)}}
+  @keyframes f2{50%{transform:translate(-50px,-30px)}}
+  .card{
+    position:relative;z-index:1;width:360px;padding:38px 32px;border-radius:20px;
+    background:linear-gradient(160deg,rgba(20,28,46,.9),rgba(10,15,26,.92));
+    border:1px solid var(--line);backdrop-filter:blur(12px);
+    box-shadow:var(--glow),0 30px 60px rgba(0,0,0,.5);
+  }
+  .logo{font-size:34px;text-align:center;margin-bottom:6px}
+  h1{font-size:19px;text-align:center;font-weight:600;letter-spacing:.3px}
+  .sub{color:var(--mut);text-align:center;font-size:13px;margin:6px 0 26px}
+  label{display:block;font-size:12px;color:var(--mut);margin:0 0 7px 2px}
+  input{
+    width:100%;padding:13px 15px;border-radius:12px;border:1px solid var(--line);
+    background:#0a0f1b;color:var(--txt);font-size:15px;outline:none;transition:.2s;
+  }
+  input:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(91,140,255,.18)}
+  button{
+    width:100%;margin-top:18px;padding:13px;border:0;border-radius:12px;cursor:pointer;
+    background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;
+    font-size:15px;font-weight:600;letter-spacing:.3px;transition:.2s;
+  }
+  button:hover{filter:brightness(1.1);transform:translateY(-1px)}
+  button:disabled{opacity:.6;cursor:wait}
+  .err{color:#ff6b81;font-size:13px;text-align:center;margin-top:14px;min-height:18px}
+</style>
+</head>
+<body>
+  <div class="orb a"></div><div class="orb b"></div>
+  <form class="card" id="f">
+    <div class="logo">🎬</div>
+    <h1>Downloader Dashboard</h1>
+    <div class="sub">Admin access only</div>
+    <label>Password</label>
+    <input type="password" id="pw" autocomplete="current-password" autofocus required>
+    <button type="submit" id="btn">Sign in →</button>
+    <div class="err" id="err"></div>
+  </form>
+<script>
+const f=document.getElementById('f'),btn=document.getElementById('btn'),err=document.getElementById('err');
+f.addEventListener('submit',async e=>{
+  e.preventDefault();err.textContent='';btn.disabled=true;btn.textContent='Signing in…';
+  try{
+    const body=new FormData();body.append('password',document.getElementById('pw').value);
+    const r=await fetch('/login',{method:'POST',body});
+    const j=await r.json();
+    if(j.ok){location.href='/';}
+    else{err.textContent=j.error||'Login failed';btn.disabled=false;btn.textContent='Sign in →';}
+  }catch(_){err.textContent='Network error';btn.disabled=false;btn.textContent='Sign in →';}
+});
+</script>
+</body>
+</html>

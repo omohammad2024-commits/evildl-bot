@@ -1,0 +1,17 @@
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.git
+.gitignore
+.env
+.env.*
+data/
+logs/
+run/
+*.session
+user_session.txt
+*.log
+.venv/
+venv/
+artifacts/
+README-dev.md
