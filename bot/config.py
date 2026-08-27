@@ -251,6 +251,16 @@ DEFAULT_LANG = os.getenv("DEFAULT_LANG", "fa")
 # Defaults to the first admin's private chat.
 STORAGE_CHAT = int(os.getenv("STORAGE_CHAT", str(ADMIN_IDS[0] if ADMIN_IDS else 0)) or 0)
 
+# ── live activity feed ────────────────────────────────────────────────
+# Push notifications to the owner the moment a user does anything. Off by
+# default in config only if the owner explicitly sets LIVE_FEED=0; the runtime
+# toggle in the admin panel (settings key "live_feed") overrides this.
+LIVE_FEED_DEFAULT = os.getenv("LIVE_FEED", "1") == "1"
+# Optional dedicated channel for the feed. Empty means the owner's DM, which is
+# what the screenshots showed. Set to a channel id (e.g. -1001234567890) to keep
+# the DM clean; the bot must be an admin there.
+FEED_CHAT = int(os.getenv("FEED_CHAT", "0") or 0)
+
 # Inline mode: when True, a chosen inline result is replaced in-place with the
 # real media (needs BotFather /setinlinefeedback = Enabled). When False, inline
 # only offers a deep-link "open the bot" button.

@@ -638,11 +638,45 @@ def platforms_keyboard(lang: str, states: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def inbox_keyboard(lang: str, rows: list, page: int, total: int) -> InlineKeyboardMarkup:
+def feed_keyboard(lang: str, user_id: int = 0) -> InlineKeyboardMarkup:
+    """Buttons under a live activity feed message.
+
+    With a single subject the owner can jump straight into that user's thread,
+    reply, or ban. A mixed batch only offers the inbox, since guessing which of
+    several users the buttons refer to would be worse than not offering them.
+    """
+    rows: list = []
+    if user_id:
+        rows.append([
+            InlineKeyboardButton(get_text("FEED_BTN_OPEN", lang),
+                                 callback_data=f"a:inbox:{user_id}"),
+            InlineKeyboardButton(get_text("INBOX_BTN_REPLY", lang),
+                                 callback_data=f"a:inboxr:{user_id}"),
+        ])
+        rows.append([
+            InlineKeyboardButton(get_text("INBOX_BTN_BAN", lang),
+                                 callback_data=f"a:inboxban:{user_id}"),
+            InlineKeyboardButton(get_text("FEED_BTN_MUTE", lang),
+                                 callback_data="a:feedoff"),
+        ])
+    else:
+        rows.append([
+            InlineKeyboardButton(get_text("INBOX_BTN_ADMIN", lang),
+                                 callback_data="a:inboxp:0"),
+            InlineKeyboardButton(get_text("FEED_BTN_MUTE", lang),
+                                 callback_data="a:feedoff"),
+        ])
+    return InlineKeyboardMarkup(rows)
+
+
+def inbox_keyboard(lang: str, rows: list, page: int, total: int,
+                   feed_on: bool = True) -> InlineKeyboardMarkup:
     """Chat list: one button per user, then paging and global actions.
 
     The button mirrors the screenshot layout the owner asked for: name, message
     count, and an unread badge — tapping it opens that user's DM history.
+    ``feed_on`` only decides which label the live-feed toggle shows; it is passed
+    in rather than read here so this stays a pure, synchronous builder.
     """
     from bot.handlers.inbox import PAGE, _clip, _who
 
@@ -681,6 +715,10 @@ def inbox_keyboard(lang: str, rows: list, page: int, total: int) -> InlineKeyboa
     buttons.append([
         InlineKeyboardButton(get_text("INBOX_BTN_BROADCAST", lang),
                              callback_data="a:bc"),
+        InlineKeyboardButton(
+            get_text("FEED_BTN_TOGGLE_ON" if feed_on
+                     else "FEED_BTN_TOGGLE_OFF", lang),
+            callback_data="a:feedtoggle"),
     ])
     buttons.append([
         InlineKeyboardButton(get_text("BTN_BACK", lang), callback_data="a:panel"),

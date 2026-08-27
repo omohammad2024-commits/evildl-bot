@@ -239,6 +239,9 @@ class Database:
     # ── users ─────────────────────────────────────────────────────────
     async def add_user(self, user_id: int, username: str = "", first_name: str = "") -> None:
         db = await self._ensure()
+        # Detect first-ever registration BEFORE the upsert, so the live feed can
+        # announce genuinely new users instead of every /start.
+        is_new = not await self.user_exists(user_id)
         await db.execute(
             "INSERT INTO users (user_id, username, first_name) VALUES (?, ?, ?) "
             "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, "
@@ -246,6 +249,14 @@ class Database:
             (user_id, username or "", first_name or ""),
         )
         await db.commit()
+        if is_new:
+            try:
+                from bot.utils import livefeed
+
+                livefeed.notify("new_user", user_id=user_id,
+                                name=first_name or "", username=username or "")
+            except Exception:
+                pass
 
     async def update_user_activity(self, user_id: int) -> None:
         db = await self._ensure()
@@ -494,6 +505,25 @@ class Database:
         else:
             await self._bump("lt_failed", 1, conn=db)
         await db.commit()
+
+        # Live feed: every finished download passes through here, success or
+        # failure, so this single hook covers all 13 platforms without touching
+        # each service module.
+        try:
+            from bot.utils import livefeed
+
+            row = await self.get_user(user_id) or {}
+            size_mb = f" · {file_size / 1048576:.1f}MB" if file_size else ""
+            livefeed.notify(
+                "download" if success else "failed",
+                user_id=user_id,
+                name=row.get("first_name") or "",
+                username=row.get("username") or "",
+                platform=platform,
+                detail=(url[:60] + size_mb) if success
+                else (error[:80] or "failed"))
+        except Exception:
+            pass  # the feed is never allowed to affect a download
 
     async def _bump(self, key: str, amount: int, conn=None) -> None:
         """Increment a counter stored in the settings table."""

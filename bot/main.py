@@ -125,6 +125,12 @@ async def post_init(application) -> None:
 
     theme_hook.install(application.bot)
 
+    # Hand the live activity feed a bot instance. It fires from places with no
+    # PTB context (the database layer, for instance), so it needs its own handle.
+    from bot.utils import livefeed
+
+    livefeed.attach(application.bot)
+
     # Warm the premium-emoji map once at boot: the first render then costs
     # nothing, and a Telegram hiccup later cannot strip the look.
     try:

@@ -596,6 +596,9 @@ async def _admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
 
     from bot.handlers import admin as A
+    # The inbox keyboard shows the live-feed state, so several branches below
+    # need it; import once here instead of in each branch.
+    from bot.utils import livefeed
 
     action = data.split(":", 1)[1]
     await query.answer()
@@ -754,7 +757,7 @@ async def _admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE,
         page = max(0, int(action.split(":", 1)[1] or 0))
         rows = await db.all_chats(IB.PAGE, page * IB.PAGE)
         await show(await IB.inbox_text(lang, page),
-                   inbox_keyboard(lang, rows, page, await db.count_users_total()))
+                   inbox_keyboard(lang, rows, page, await db.count_users_total(), await livefeed.enabled()))
     elif action.startswith("inboxt:"):
         from bot.handlers import inbox as IB
         from bot.keyboards.inline import thread_keyboard
@@ -766,6 +769,15 @@ async def _admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await show(await IB.thread_text(uid, lang, page),
                    thread_keyboard(lang, uid, page,
                                    await db.count_conversation(uid)))
+    elif action in ("feedoff", "feedon", "feedtoggle"):
+        if action == "feedtoggle":
+            new_state = not await livefeed.enabled()
+        else:
+            new_state = (action == "feedon")
+        await db.set_setting("live_feed", "1" if new_state else "0")
+        await query.answer(
+            get_text("FEED_ENABLED" if new_state else "FEED_DISABLED", lang),
+            show_alert=True)
     elif action.startswith("inboxg:"):
         from bot.handlers import inbox as IB
         from bot.keyboards.inline import gallery_keyboard
@@ -800,7 +812,7 @@ async def _admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE,
         rows = await db.all_chats(IB.PAGE, 0)
         await query.answer(get_text("INBOX_READALL_OK", lang))
         await show(await IB.inbox_text(lang, 0),
-                   inbox_keyboard(lang, rows, 0, await db.count_users_total()))
+                   inbox_keyboard(lang, rows, 0, await db.count_users_total(), await livefeed.enabled()))
     elif action.startswith("inboxr:"):
         from bot.handlers import inbox as IB
 
@@ -825,7 +837,7 @@ async def _admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         rows = await db.all_chats(IB.PAGE, 0)
         await show(await IB.inbox_text(lang, 0),
-                   inbox_keyboard(lang, rows, 0, await db.count_users_total()))
+                   inbox_keyboard(lang, rows, 0, await db.count_users_total(), await livefeed.enabled()))
     elif action == "inboxfind":
         context.user_data["await_inbox_search"] = True
         await show(get_text("INBOX_SEARCH_PROMPT", lang), admin_back_keyboard(lang))
