@@ -547,10 +547,13 @@ async def _post_download(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
     await query.answer()
 
-    from bot.handlers.download import convert_and_send_mp3, run_download, send_subtitle
+    from bot.handlers.download import (convert_and_send_mp3, run_download,
+                                       send_original_png, send_subtitle)
 
     if action == "mp3":
         await convert_and_send_mp3(update, context, job.url, job.platform, lang)
+    elif action == "png":
+        await send_original_png(update, context, job.url, job.platform, lang)
     elif action == "sub":
         await send_subtitle(update, context, job.url, job.platform, lang)
     elif action == "fav":
@@ -564,6 +567,8 @@ async def _post_download(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await query.answer(get_text("FAV_ADDED", lang))
             is_fav = True
         # Reflect the new state on the button without touching the media.
+        # show_png must be recomputed here too: rebuilding the markup without it
+        # would silently drop the PNG button the moment a user taps favourite.
         from bot.keyboards.inline import after_download_keyboard
         try:
             await query.message.edit_reply_markup(
@@ -572,6 +577,7 @@ async def _post_download(update: Update, context: ContextTypes.DEFAULT_TYPE,
                     show_mp3=(job.platform != "spotify"),
                     show_subtitle=(job.platform == "youtube"),
                     is_fav=is_fav,
+                    show_png=(job.platform == "pinterest"),
                 )
             )
         except Exception:

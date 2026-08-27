@@ -112,23 +112,52 @@ class PinterestDownloader(YtDlpDownloader):
 
     @staticmethod
     def _best_image(data: Dict[str, Any]) -> Optional[str]:
-        images = data.get("images") or {}
-        # 'orig' is the untouched upload; the numbered keys are resizes.
-        if isinstance(images.get("orig"), dict) and images["orig"].get("url"):
-            return images["orig"]["url"]
+        """Highest-resolution still in the payload, scored by real pixel count.
 
-        def dim(key: str) -> int:
-            m = re.match(r"(\d+)x", key)
-            return int(m.group(1)) if m else 0
+        The old version returned ``images['orig']`` whenever it existed. That is
+        usually the largest, but not always: on some pins ``orig`` is a cropped
+        or re-encoded rendition while a numbered key (or a story page's
+        ``originals``) carries more pixels. Verified on live pins — the numbered
+        keys and ``orig`` frequently report identical dimensions, so guessing by
+        name alone throws away information that is right there in the payload.
 
-        candidates = [
-            (dim(k), v.get("url")) for k, v in images.items()
-            if isinstance(v, dict) and v.get("url")
-        ]
-        candidates = [c for c in candidates if c[1]]
-        if not candidates:
-            return None
-        return max(candidates, key=lambda c: c[0])[1]
+        Scoring every candidate by ``width * height`` and keeping the winner is
+        strictly better, and it also reaches story pins, whose stills live under
+        ``story_pin_data.pages[].image.images`` and were previously unreachable
+        for image-only story pins.
+        """
+        best_url, best_score = None, -1
+
+        def consider(images: Any) -> None:
+            nonlocal best_url, best_score
+            if not isinstance(images, dict):
+                return
+            for key, variant in images.items():
+                if not isinstance(variant, dict):
+                    continue
+                url = variant.get("url")
+                if not url:
+                    continue
+                w = variant.get("width") or 0
+                h = variant.get("height") or 0
+                score = w * h
+                if not score:
+                    # No dimensions given: fall back to the number in the key
+                    # ("736x" -> 736) so an unlabelled variant still ranks.
+                    m = re.match(r"(\d+)x", str(key))
+                    score = int(m.group(1)) if m else 0
+                # Prefer /originals/ on a tie: it is the untouched upload.
+                if score > best_score or (score == best_score
+                                          and "/originals/" in url):
+                    best_url, best_score = url, score
+
+        consider(data.get("images"))
+        for page in (data.get("story_pin_data") or {}).get("pages") or []:
+            for key in ("image", "image_adjusted"):
+                consider((page.get(key) or {}).get("images"))
+            for block in page.get("blocks") or []:
+                consider((block.get("image") or {}).get("images"))
+        return best_url
 
     async def _via_api(self, url: str) -> DownloadResult:
         pin_id = self._pin_id(url)
@@ -164,6 +193,42 @@ class PinterestDownloader(YtDlpDownloader):
             uploader=uploader,
             platform=self.name,
         )
+
+    # ── PNG delivery ──────────────────────────────────────────────────
+    async def original_image(self, url: str, dest_dir: str = "") -> Tuple[str, int, int]:
+        """Download the pin's highest-resolution still and return it as a PNG.
+
+        Backs the "🖼 PNG file" button. Two things make this higher quality than
+        the photo the bot normally sends:
+
+        * Telegram re-encodes anything sent with ``send_photo`` to JPEG and caps
+          the long side at 2560px. Sending the same pixels as a *document*
+          bypasses both, so the user gets the untouched original resolution.
+        * PNG is lossless, so no second generation of JPEG artefacts is added on
+          top of whatever Pinterest already stored.
+
+        Returns ``(png_path, width, height)``. Raises on failure — the caller
+        turns that into a user-facing message.
+        """
+        url = await self._resolve(url)
+        pin_id = self._pin_id(url)
+        if not pin_id:
+            raise ValueError("could not read the pin id from the link")
+
+        data = await self._api_fetch(pin_id, url)
+        image = self._best_image(data)
+        if not image:
+            raise ValueError("the pin has no still image")
+
+        # Fetch to its native extension first; converting from the real bytes is
+        # safer than trusting the URL's suffix.
+        src_ext = "png" if ".png" in image.lower() else "jpg"
+        src = self.temp_path(src_ext, prefix="pinorig")
+        await download_file(image, src, referer=REFERER)
+
+        from bot.utils.media_handler import to_png
+
+        return await to_png(src)
 
     # ── last resort: scrape the page ──────────────────────────────────
     async def _scrape(self, url: str) -> DownloadResult:

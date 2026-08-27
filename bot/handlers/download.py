@@ -11,7 +11,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from telegram import Message, Update
-from telegram.constants import ChatAction
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ContextTypes
 
 from bot import config
@@ -293,6 +293,11 @@ async def process_url(
                              chat_id=message.chat_id, quality=cache_quality)),
                 lang,
                 show_mp3=cached.get("file_type") == "video",
+                # Cache hits get the PNG button too: the original is re-fetched
+                # from Pinterest on demand, so a cached JPEG file_id does not
+                # prevent delivering full-resolution pixels.
+                show_png=(platform == "pinterest"
+                          and cached.get("file_type") == "photo"),
             ),
         )
         if sent is not None:
@@ -587,6 +592,9 @@ async def run_download(
                     show_mp3=(item.kind == "video"),
                     show_subtitle=(platform == "youtube" and item.kind == "video"),
                     is_fav=is_fav,
+                    # A Pinterest still can be re-delivered as a full-resolution
+                    # PNG document, bypassing Telegram's JPEG re-encode.
+                    show_png=(platform == "pinterest" and item.kind == "photo"),
                 ),
             )
             if sent.get("file_id") and not service_hint_volatile(url):
@@ -658,6 +666,57 @@ async def convert_and_send_mp3(update, context, url: str, platform: str, lang: s
             return True
     return await run_download(update, context, url, platform=platform,
                               quality="mp3", lang=lang)
+
+
+async def send_original_png(update, context, url: str, platform: str,
+                            lang: str) -> bool:
+    """The '🖼 PNG' button: deliver the pin's original pixels as a document.
+
+    Sent with ``reply_document`` on purpose. ``send_photo`` would re-encode to
+    JPEG and cap the long side at 2560px, which is exactly the quality loss this
+    button exists to avoid.
+
+    The file is always removed afterwards — /data is a 434MB volume, so a PNG
+    (which is much larger than the source JPEG) must never be left behind, even
+    when the upload fails.
+    """
+    message = update.effective_message
+    service = get_service(platform)
+    if not hasattr(service, "original_image"):
+        await message.reply_text(get_text("PNG_UNAVAILABLE", lang))
+        return False
+
+    note = await message.reply_text(get_text("PNG_WORKING", lang))
+    path = None
+    try:
+        path, width, height = await service.original_image(url)
+        size = get_file_size(path)
+        if size == 0:
+            raise ValueError("conversion produced an empty file")
+        if size > config.BOT_API_LIMIT:
+            # A lossless PNG of a big pin can exceed the Bot API's 50MB ceiling.
+            # Say so plainly instead of failing with a raw API error.
+            await _edit(note, get_text("PNG_TOO_BIG", lang,
+                                       size=f"{size / 1048576:.1f}"))
+            return False
+
+        with open(path, "rb") as fh:
+            await message.reply_document(
+                document=fh,
+                filename=os.path.basename(path),
+                caption=get_text("PNG_READY", lang, width=width, height=height,
+                                 size=f"{size / 1048576:.1f}"),
+                parse_mode=ParseMode.HTML,
+            )
+        await _safe_delete(note)
+        return True
+    except Exception as exc:
+        logger.info("PNG delivery failed for %s: %s", url, exc)
+        await _edit(note, get_text("PNG_FAILED", lang))
+        return False
+    finally:
+        if path:
+            await delete_file(path)
 
 
 async def send_subtitle(update, context, url: str, platform: str, lang: str) -> bool:

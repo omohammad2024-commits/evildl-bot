@@ -482,6 +482,55 @@ async def _remux_faststart(path: str) -> str:
     return out
 
 
+async def to_png(path: str, *, keep_source: bool = False) -> Tuple[str, int, int]:
+    """Convert an image to lossless PNG, preserving its full resolution.
+
+    Used by the Pinterest "PNG file" button. Telegram's ``send_photo`` re-encodes
+    to JPEG and caps the long side at 2560px, so the way to hand the user the
+    real pixels is to send a PNG as a *document*. Converting from JPEG does not
+    recover detail JPEG already discarded, but it stops a SECOND lossy generation
+    being added on top, which is the visible difference.
+
+    Runs in a thread: Pillow is synchronous and a large decode would otherwise
+    stall the event loop.
+
+    Returns ``(png_path, width, height)``. The source file is removed unless
+    ``keep_source`` is set.
+    """
+    def _convert() -> Tuple[str, int, int]:
+        from PIL import Image
+
+        # Guard against decompression-bomb rejections on legitimately huge pins:
+        # Pillow's default ceiling is ~89Mpx and some Pinterest originals are
+        # larger. We control the source (pinimg.com), so raising it is safe.
+        Image.MAX_IMAGE_PIXELS = 400_000_000
+
+        out = f"{os.path.splitext(path)[0]}.png"
+        with Image.open(path) as im:
+            # Normalise exotic modes (P, CMYK, I;16 …) into something PNG can
+            # store. Transparency detection has to look at BOTH the bands and
+            # ``info['transparency']``: a palette image carries its alpha in the
+            # palette, so its bands are just ("P",) and checking bands alone
+            # would silently flatten a transparent GIF/PNG onto black.
+            if im.mode not in ("RGB", "RGBA", "L"):
+                has_alpha = ("A" in im.getbands()
+                             or "transparency" in im.info
+                             or im.mode in ("PA", "LA"))
+                im = im.convert("RGBA" if has_alpha else "RGB")
+            w, h = im.size
+            if out == path:
+                # Already a .png on disk — nothing to convert.
+                return path, w, h
+            im.save(out, format="PNG", optimize=True)
+        return out, w, h
+
+    loop = asyncio.get_running_loop()
+    out, w, h = await loop.run_in_executor(None, _convert)
+    if out != path and not keep_source:
+        await delete_file(path)
+    return out, w, h
+
+
 async def make_thumbnail(video_path: str, out_path: str = "") -> Optional[str]:
     """Grab a frame for the video preview bubble.
 

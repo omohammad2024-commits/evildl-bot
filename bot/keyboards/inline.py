@@ -120,6 +120,7 @@ _ROLE_RULES = (
     ("m:", ("menu", "")),
     ("q:", ("quality", "")),
     ("d:mp3", ("action", "audio")),
+    ("d:png", ("action", "upload")),
     ("d:sub", ("action", "sub")),
     ("d:fav", ("action", "star")),
     ("d:again", ("action", "download")),
@@ -429,6 +430,7 @@ def after_download_keyboard(token: str, lang: str, *,
                             show_mp3: bool = True,
                             show_subtitle: bool = False,
                             is_fav: bool = False,
+                            show_png: bool = False,
                             direct_url: str = "") -> InlineKeyboardMarkup:
     """Actions under a delivered file, mirroring the reference bot layout."""
     rows: List[List[InlineKeyboardButton]] = []
@@ -441,6 +443,11 @@ def after_download_keyboard(token: str, lang: str, *,
                                         callback_data=f"d:sub:{token}"))
     if top:
         rows.append(top)
+    # Pinterest stills: offer the untouched original as a PNG document. Its own
+    # row because it is the primary action for an image pin, not a side option.
+    if show_png:
+        rows.append([InlineKeyboardButton(get_text("BTN_PNG", lang),
+                                         callback_data=f"d:png:{token}")])
     row = [InlineKeyboardButton(get_text("BTN_REDOWNLOAD", lang),
                                 callback_data=f"d:again:{token}")]
     fav_key = "BTN_FAV_ON" if is_fav else "BTN_FAV_OFF"
