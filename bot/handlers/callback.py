@@ -771,6 +771,39 @@ async def _admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await show(await IB.thread_text(uid, lang, page),
                    thread_keyboard(lang, uid, page,
                                    await db.count_conversation(uid)))
+    elif action == "gate":
+        from bot.keyboards.inline import gate_keyboard
+        from bot.utils import gate as G
+
+        await show(await A.gate_text(context.bot, lang),
+                   gate_keyboard(lang, await G.channels()))
+    elif action == "gateadd":
+        # Same verified add path as /setchannel, just reached by button.
+        context.user_data["await_gate_add"] = True
+        await show(get_text("GATE_ADD_PROMPT", lang), admin_back_keyboard(lang))
+    elif action == "gateoff":
+        from bot.keyboards.inline import gate_keyboard
+        from bot.utils import gate as G
+
+        await G.save_channels([])
+        await query.answer(get_text("CHANNEL_OFF", lang), show_alert=True)
+        await show(await A.gate_text(context.bot, lang),
+                   gate_keyboard(lang, await G.channels()))
+    elif action.startswith("gatedel:"):
+        from bot.keyboards.inline import gate_keyboard
+        from bot.utils import gate as G
+
+        target = action.split(":", 1)[1]
+        items = await G.channels()
+        kept = [c for c in items if str(c.get("id")) != target]
+        if len(kept) == len(items):
+            await query.answer(get_text("CHANNEL_NOT_FOUND", lang, channel=target),
+                               show_alert=True)
+        else:
+            await G.save_channels(kept)
+            await query.answer(get_text("CHANNEL_REMOVED", lang, channel=target))
+        await show(await A.gate_text(context.bot, lang),
+                   gate_keyboard(lang, await G.channels()))
     elif action in ("feedoff", "feedon", "feedtoggle"):
         if action == "feedtoggle":
             new_state = not await livefeed.enabled()

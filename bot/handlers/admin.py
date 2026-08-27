@@ -657,6 +657,44 @@ async def _gate_status_text(bot, lang: str) -> str:
     return "\n".join(lines)
 
 
+async def gate_text(bot, lang: str) -> str:
+    """The forced-join screen for the admin panel.
+
+    Deliberately NOT a wrapper around ``_gate_status_text``: that text ends with
+    "type /setchannel @channel", which is exactly the instruction the panel
+    exists to replace. Telling a button user to type a command is worse than no
+    help at all. The per-channel verification is the same, so a channel where the
+    bot lost its admin rights still reports 🔴 here.
+    """
+    from bot.utils import gate
+
+    items = await gate.channels()
+    if not items:
+        return (get_text("GATE_PANEL_OFF", lang) + "\n\n"
+                + get_text("GATE_PANEL_HINT", lang))
+
+    lines = [get_text("CHANNEL_STATUS_TITLE", lang), ""]
+    broken = 0
+    for entry in items:
+        usable, _fresh, _problem = await gate.verify_channel(bot, entry["id"])
+        if not usable:
+            broken += 1
+        lines.append(f"{'🟢' if usable else '🔴'} <b>{gate.channel_label(entry)}</b>")
+        handle = entry.get("handle", "")
+        if handle.startswith("@"):
+            lines.append(f"   {handle}")
+        else:
+            lines.append(f"   <code>{entry.get('id')}</code>")
+        if not usable:
+            lines.append("   " + get_text("CHANNEL_STATUS_BROKEN", lang))
+    lines.append("")
+    lines.append(get_text("GATE_PANEL_COUNT", lang, count=len(items)))
+    if broken:
+        lines.append(get_text("GATE_PANEL_BROKEN", lang, count=broken))
+    lines.append(get_text("GATE_PANEL_REMOVE_HINT", lang))
+    return "\n".join(lines)
+
+
 async def maintenance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = await _guard(update)
     if lang is None:
@@ -1114,6 +1152,45 @@ async def consume_pending_input(update: Update, context: ContextTypes.DEFAULT_TY
             await IB.search_text((message.text or "").strip(), lang),
             parse_mode=ParseMode.HTML,
             reply_markup=admin_back_keyboard(lang))
+        return True
+
+    if context.user_data.pop("await_gate_add", False):
+        from bot.keyboards.inline import gate_keyboard
+        from bot.utils import gate as G
+
+        value = (message.text or "").strip()
+        # Accept "@name", "name", a t.me link, or a raw -100… id: the owner
+        # typing a full URL is the common case and rejecting it would be rude.
+        for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+            if value.lower().startswith(prefix):
+                value = value[len(prefix):]
+                break
+        value = value.strip("/")
+        target = value if value.startswith(("@", "-100")) else "@" + value.lstrip("@")
+
+        usable, entry, problem = await G.verify_channel(context.bot, target)
+        if not usable:
+            # Reuse the command's diagnostics so a missing admin promotion is
+            # reported the same way in both flows.
+            await message.reply_text(_gate_problem_text(problem, target, lang),
+                                     parse_mode=ParseMode.HTML,
+                                     reply_markup=gate_keyboard(
+                                         lang, await G.channels()))
+            return True
+
+        items = await G.channels()
+        if any(str(c.get("id")) == entry["id"] for c in items):
+            await message.reply_text(
+                get_text("CHANNEL_EXISTS", lang, channel=G.channel_label(entry)),
+                parse_mode=ParseMode.HTML,
+                reply_markup=gate_keyboard(lang, items))
+            return True
+
+        items.append(entry)
+        await G.save_channels(items)
+        await message.reply_text(
+            await gate_text(context.bot, lang), parse_mode=ParseMode.HTML,
+            reply_markup=gate_keyboard(lang, items))
         return True
 
     if context.user_data.pop("await_theme_pack", False):

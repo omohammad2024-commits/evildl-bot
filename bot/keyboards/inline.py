@@ -72,6 +72,12 @@ _ROLE_RULES = (
     ("a:grpp:0", ("menu", "users")),
     ("a:grpp", ("nav", "users")),
     ("a:grp", ("menu", "users")),
+    # NOTE: the second element must be a real theme SLOT name (see
+    # bot.utils.theme.SLOTS) or the premium icon lookup silently does nothing.
+    ("a:gatedel", ("cancel", "fail")),
+    ("a:gateoff", ("cancel", "fail")),
+    ("a:gateadd", ("action", "invite")),
+    ("a:gate", ("menu", "sub")),
     ("a:inboxban", ("cancel", "fail")),
     ("a:inboxr", ("action", "invite")),
     ("a:inboxfind", ("menu", "search")),
@@ -523,10 +529,47 @@ def admin_keyboard(lang: str, maintenance: bool = False) -> InlineKeyboardMarkup
             InlineKeyboardButton(get_text("BTN_ADMIN_THEME", lang), callback_data="a:theme"),
         ],
         [
+            InlineKeyboardButton(get_text("BTN_ADMIN_GATE", lang), callback_data="a:gate"),
+        ],
+        [
             InlineKeyboardButton(get_text("BTN_ADMIN_REFRESH", lang), callback_data="a:panel"),
             InlineKeyboardButton(get_text("BTN_CLOSE", lang), callback_data="x"),
         ],
     ])
+
+
+def gate_keyboard(lang: str, items: list) -> InlineKeyboardMarkup:
+    """Forced-join manager: add, remove per channel, and a global off switch.
+
+    Each configured channel gets its own remove button keyed by channel id, so
+    the owner never has to type a handle. Callback data carries the id, which for
+    a private channel is a ``-100…`` number — well inside the 64-byte budget.
+    """
+    rows: list = []
+    for entry in items:
+        label = entry.get("title") or entry.get("handle") or entry.get("id", "")
+        if len(label) > 22:
+            label = label[:21] + "…"
+        rows.append([InlineKeyboardButton(
+            f"➖ {label}",
+            callback_data=f"a:gatedel:{entry.get('id')}")])
+    rows.append([
+        InlineKeyboardButton(get_text("GATE_BTN_ADD", lang),
+                             callback_data="a:gateadd"),
+    ])
+    if items:
+        rows.append([
+            InlineKeyboardButton(get_text("GATE_BTN_OFF", lang),
+                                 callback_data="a:gateoff"),
+        ])
+    rows.append([
+        InlineKeyboardButton(get_text("BTN_REFRESH", lang), callback_data="a:gate"),
+        InlineKeyboardButton(get_text("BTN_BACK", lang), callback_data="a:panel"),
+    ])
+    rows.append([
+        InlineKeyboardButton(get_text("BTN_CLOSE", lang), callback_data="x"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 def theme_keyboard(lang: str, premium: bool, blue: bool,
