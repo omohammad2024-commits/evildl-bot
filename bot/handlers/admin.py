@@ -955,10 +955,10 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     from bot.keyboards.inline import inbox_keyboard
 
     lang = await db.get_user_language(user.id)
-    rows = await db.recent_chats(IB.PAGE, 0)
+    rows = await db.all_chats(IB.PAGE, 0)
     await update.effective_message.reply_text(
         await IB.inbox_text(lang, 0), parse_mode=ParseMode.HTML,
-        reply_markup=inbox_keyboard(lang, rows, 0, await db.count_chats()))
+        reply_markup=inbox_keyboard(lang, rows, 0, await db.count_users_total()))
 
 
 async def theme_text(lang: str) -> str:

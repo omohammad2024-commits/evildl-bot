@@ -639,10 +639,10 @@ def platforms_keyboard(lang: str, states: dict) -> InlineKeyboardMarkup:
 
 
 def inbox_keyboard(lang: str, rows: list, page: int, total: int) -> InlineKeyboardMarkup:
-    """Chat list: one button per conversation, then paging and global actions.
+    """Chat list: one button per user, then paging and global actions.
 
-    The per-chat button carries the unread badge so the owner can see at a glance
-    which conversations are waiting, without opening each one.
+    The button mirrors the screenshot layout the owner asked for: name, message
+    count, and an unread badge — tapping it opens that user's DM history.
     """
     from bot.handlers.inbox import PAGE, _clip, _who
 
@@ -650,9 +650,13 @@ def inbox_keyboard(lang: str, rows: list, page: int, total: int) -> InlineKeyboa
     for row in rows:
         unread = int(row.get("unread") or 0)
         badge = f" 🔴{unread}" if unread else ""
+        count = int(row.get("total") or 0)
+        banned = "🚫 " if row.get("is_banned") else "👤 "
+        label = f"{banned}{_clip(_who(row), 20)}"
+        if count:
+            label += f" · {count}"
         buttons.append([InlineKeyboardButton(
-            f"💬 {_clip(_who(row), 20)} · {row.get('total', 0)}{badge}",
-            callback_data=f"a:inbox:{row['user_id']}")])
+            f"{label}{badge}", callback_data=f"a:inbox:{row['user_id']}")])
     nav: list = []
     if page > 0:
         nav.append(InlineKeyboardButton(get_text("BTN_PREV", lang),

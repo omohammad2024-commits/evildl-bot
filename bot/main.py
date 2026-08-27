@@ -193,9 +193,13 @@ async def periodic_maintenance(context) -> None:
     await asyncio.to_thread(trim_logs)
     report = await db.maintain(aggressive=panic)
 
-    # Keep the owner inbox log bounded — /data is a small volume.
+    # Keep the owner inbox log bounded — /data is a small volume. Now that the
+    # bot's own replies are logged too, volume roughly doubles, so the per-user
+    # cap is what actually protects a quiet user's history from a chatty one.
     try:
-        dropped = await db.prune_messages(2000 if panic else 5000)
+        dropped = await db.prune_messages(
+            keep=4000 if panic else 12000,
+            per_user=100 if panic else 300)
         if dropped:
             logger.info("inbox log pruned: -%s rows", dropped)
     except Exception as exc:

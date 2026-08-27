@@ -752,9 +752,9 @@ async def _admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE,
         from bot.keyboards.inline import inbox_keyboard
 
         page = max(0, int(action.split(":", 1)[1] or 0))
-        rows = await db.recent_chats(IB.PAGE, page * IB.PAGE)
+        rows = await db.all_chats(IB.PAGE, page * IB.PAGE)
         await show(await IB.inbox_text(lang, page),
-                   inbox_keyboard(lang, rows, page, await db.count_chats()))
+                   inbox_keyboard(lang, rows, page, await db.count_users_total()))
     elif action.startswith("inboxt:"):
         from bot.handlers import inbox as IB
         from bot.keyboards.inline import thread_keyboard
@@ -795,12 +795,12 @@ async def _admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE,
         from bot.keyboards.inline import inbox_keyboard
 
         # Mark every conversation read in one pass, then redraw the list.
-        for row in await db.recent_chats(500, 0):
+        for row in await db.recent_chats(500, 0):  # KEEP: only message-bearing rows can be unread
             await db.mark_seen(int(row["user_id"]))
-        rows = await db.recent_chats(IB.PAGE, 0)
+        rows = await db.all_chats(IB.PAGE, 0)
         await query.answer(get_text("INBOX_READALL_OK", lang))
         await show(await IB.inbox_text(lang, 0),
-                   inbox_keyboard(lang, rows, 0, await db.count_chats()))
+                   inbox_keyboard(lang, rows, 0, await db.count_users_total()))
     elif action.startswith("inboxr:"):
         from bot.handlers import inbox as IB
 
@@ -823,9 +823,9 @@ async def _admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE,
         from bot.handlers import inbox as IB
         from bot.keyboards.inline import inbox_keyboard
 
-        rows = await db.recent_chats(IB.PAGE, 0)
+        rows = await db.all_chats(IB.PAGE, 0)
         await show(await IB.inbox_text(lang, 0),
-                   inbox_keyboard(lang, rows, 0, await db.count_chats()))
+                   inbox_keyboard(lang, rows, 0, await db.count_users_total()))
     elif action == "inboxfind":
         context.user_data["await_inbox_search"] = True
         await show(get_text("INBOX_SEARCH_PROMPT", lang), admin_back_keyboard(lang))

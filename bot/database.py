@@ -254,6 +254,18 @@ class Database:
         )
         await db.commit()
 
+    async def user_exists(self, user_id: int) -> bool:
+        """Cheap existence check for the outgoing-message logger.
+
+        Called on every outbound send, so it must not build a dict or touch more
+        than the primary-key index.
+        """
+        db = await self._ensure()
+        async with db.execute(
+            "SELECT 1 FROM users WHERE user_id = ? LIMIT 1", (user_id,)
+        ) as cur:
+            return await cur.fetchone() is not None
+
     async def get_user(self, user_id: int) -> Optional[Dict[str, Any]]:
         db = await self._ensure()
         async with db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)) as cur:
@@ -1094,6 +1106,53 @@ class Database:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
+    async def all_chats(self, limit: int = 12, offset: int = 0) -> List[Dict[str, Any]]:
+        """EVERY registered user, newest-active first — the real account view.
+
+        ``recent_chats`` derives its list FROM ``messages``, so a user who only
+        ever tapped buttons, or who registered before message logging existed,
+        is invisible there even though the bot knows them. This starts from
+        ``users`` and LEFT JOINs the log instead, so the inbox lists the whole
+        user base the way a Telegram account lists every chat.
+        """
+        db = await self._ensure()
+        sql = (
+            "SELECT u.user_id, u.username, u.first_name, u.is_banned, "
+            "       u.total_downloads, u.join_date, "
+            "       COALESCE(m.total, 0) AS total, "
+            "       COALESCE(m.unread, 0) AS unread, "
+            "       COALESCE(m.last_at, u.last_active) AS last_at, "
+            "       m.last_id, m.last_text, m.last_kind, m.last_dir "
+            "FROM users u LEFT JOIN ("
+            "    SELECT user_id, COUNT(*) AS total, MAX(id) AS last_id, "
+            "           MAX(created_at) AS last_at, "
+            "           SUM(CASE WHEN direction = 'in' AND COALESCE(seen,0) = 0 "
+            "                    THEN 1 ELSE 0 END) AS unread, "
+            "           (SELECT text FROM messages x WHERE x.user_id = mm.user_id "
+            "            ORDER BY x.id DESC LIMIT 1) AS last_text, "
+            "           (SELECT kind FROM messages x WHERE x.user_id = mm.user_id "
+            "            ORDER BY x.id DESC LIMIT 1) AS last_kind, "
+            "           (SELECT direction FROM messages x WHERE x.user_id = mm.user_id "
+            "            ORDER BY x.id DESC LIMIT 1) AS last_dir "
+            "    FROM messages mm WHERE chat_type = 'private' GROUP BY user_id"
+            ") m ON m.user_id = u.user_id "
+            # Users with traffic sort above silent ones; within each band the
+            # most recent activity wins.
+            "ORDER BY (m.last_id IS NULL), COALESCE(m.last_id, 0) DESC, "
+            "         u.last_active DESC "
+            "LIMIT ? OFFSET ?"
+        )
+        async with db.execute(sql, (limit, offset)) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def count_users_total(self) -> int:
+        """Every registered user, including ones who never sent a message."""
+        db = await self._ensure()
+        async with db.execute("SELECT COUNT(*) FROM users") as cur:
+            row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
     async def recent_chats(self, limit: int = 12, offset: int = 0) -> List[Dict[str, Any]]:
         """Users with recent traffic, newest first — the inbox list.
 
@@ -1161,21 +1220,51 @@ class Database:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def prune_messages(self, keep: int = 5000) -> int:
-        """Keep the log bounded — /data is small. Returns rows deleted."""
+    async def prune_messages(self, keep: int = 5000, per_user: int = 300) -> int:
+        """Keep the log bounded — /data is small. Returns rows deleted.
+
+        Two-stage, and the per-user stage matters: a plain global FIFO cap lets
+        one chatty user's traffic evict everyone else's history, so the owner
+        would open a quiet user's thread and find it empty. So first trim each
+        user to their newest ``per_user`` rows (fair), then apply the global
+        ceiling as a backstop (safe). Starred rows are never pruned — the owner
+        explicitly pinned them.
+        """
         db = await self._ensure()
         async with db.execute("SELECT COUNT(*) c FROM messages") as cur:
             row = await cur.fetchone()
         total = row["c"] if row else 0
         if total <= keep:
             return 0
+
+        # Stage 1: per-user fairness. ROW_NUMBER needs SQLite 3.25+ (2018).
         await db.execute(
-            "DELETE FROM messages WHERE id <= "
-            "(SELECT id FROM messages ORDER BY id DESC LIMIT 1 OFFSET ?)",
-            (keep,),
+            "DELETE FROM messages WHERE id IN ("
+            "  SELECT id FROM ("
+            "    SELECT id, ROW_NUMBER() OVER ("
+            "      PARTITION BY user_id ORDER BY id DESC) AS rn"
+            "    FROM messages WHERE COALESCE(starred,0) = 0"
+            "  ) WHERE rn > ?"
+            ")",
+            (per_user,),
         )
         await db.commit()
-        return total - keep
+
+        # Stage 2: global backstop, in case there are simply too many users.
+        async with db.execute("SELECT COUNT(*) c FROM messages") as cur:
+            row = await cur.fetchone()
+        mid = row["c"] if row else 0
+        if mid > keep:
+            await db.execute(
+                "DELETE FROM messages WHERE COALESCE(starred,0) = 0 AND id <= "
+                "(SELECT id FROM messages ORDER BY id DESC LIMIT 1 OFFSET ?)",
+                (keep,),
+            )
+            await db.commit()
+
+        async with db.execute("SELECT COUNT(*) c FROM messages") as cur:
+            row = await cur.fetchone()
+        return total - (row["c"] if row else 0)
 
 
     # ── groups ────────────────────────────────────────────────────────

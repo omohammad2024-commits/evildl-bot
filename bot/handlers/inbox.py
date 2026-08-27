@@ -205,12 +205,17 @@ def _ago(stamp: str) -> str:
 
 
 async def inbox_text(lang: str, page: int = 0) -> str:
-    """The chat-list screen: every private conversation, unread first-class."""
+    """The chat-list screen: EVERY user the bot knows, like a real account.
+
+    Sourced from ``all_chats`` (users LEFT JOIN messages), not from the message
+    log, so users who only ever tapped buttons still appear — they were silently
+    missing before.
+    """
     from bot.utils import theme
 
-    total = await db.count_chats()
+    total = await db.count_users_total()
     unread = await db.unread_total()
-    rows = await db.recent_chats(PAGE, page * PAGE)
+    rows = await db.all_chats(PAGE, page * PAGE)
     div = await theme.divider()
     head = get_text("INBOX_TITLE", lang) + "\n" + div + "\n"
     if not rows:
@@ -221,17 +226,29 @@ async def inbox_text(lang: str, page: int = 0) -> str:
         lines.append(get_text("INBOX_UNREAD_LINE", lang, count=unread))
     lines.append("")
     for row in rows:
-        icon = _KIND_ICON.get(row.get("last_kind") or "text", "💬")
         n_unread = int(row.get("unread") or 0)
-        # An unread row is bolded and badged; a row whose last message is the
-        # owner's own reply is marked so it's clear who spoke last.
         badge = f" <b>({n_unread})</b>" if n_unread else ""
-        arrow = "↩️ " if (row.get("last_dir") == "out") else ""
         when = _ago(row.get("last_at") or "")
+        banned = " 🚫" if row.get("is_banned") else ""
+        handle = f"@{row['username']}" if row.get("username") else ""
+        meta = f"🆔 <code>{row.get('user_id')}</code>"
+        if handle:
+            meta = f"{handle} · " + meta
+        if int(row.get("total") or 0) == 0:
+            # A known user with no logged traffic: say so plainly instead of
+            # rendering an empty-looking row.
+            lines.append(
+                f"👤 <b>{_esc(_who(row))}</b>{banned}{badge} · <i>{when}</i>\n"
+                f"   {meta}\n"
+                f"   <i>{get_text('INBOX_NO_HISTORY', lang)}</i>")
+            continue
+        icon = _KIND_ICON.get(row.get("last_kind") or "text", "💬")
+        arrow = "↩️ " if (row.get("last_dir") == "out") else ""
         lines.append(
-            f"{icon} <b>{_esc(_who(row))}</b>{badge} · {row.get('total', 0)}"
+            f"👤 <b>{_esc(_who(row))}</b>{banned}{badge} · {row.get('total', 0)}"
             f" · <i>{when}</i>\n"
-            f"   {arrow}<i>{_esc(_clip(row.get('last_text') or ''))}</i>")
+            f"   {meta}\n"
+            f"   {arrow}{icon} <i>{_esc(_clip(row.get('last_text') or ''))}</i>")
     return "\n".join(lines)
 
 

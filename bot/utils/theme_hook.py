@@ -77,7 +77,19 @@ def _wrap(original):
         except Exception as exc:
             logger.debug("premium emoji skipped: %s", exc)
 
-        return await original(self, *args, **kwargs)
+        result = await original(self, *args, **kwargs)
+
+        # Log the bot's own half of the conversation so the owner inbox shows a
+        # real two-sided thread. After the call, because the returned Message is
+        # the only reliable source of the file_id Telegram assigned.
+        try:
+            from bot.utils.outlog import log_send
+
+            await log_send(original.__name__, kwargs, result)
+        except Exception as exc:  # never block a send over logging
+            logger.debug("outgoing log hook skipped: %s", exc)
+
+        return result
 
     return call
 
