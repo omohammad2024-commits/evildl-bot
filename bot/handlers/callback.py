@@ -761,9 +761,46 @@ async def _admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         _, uid, page = action.split(":")
         uid, page = int(uid), max(0, int(page))
+        # Opening a thread marks it read, the way any messenger behaves.
+        await db.mark_seen(uid)
         await show(await IB.thread_text(uid, lang, page),
                    thread_keyboard(lang, uid, page,
                                    await db.count_conversation(uid)))
+    elif action.startswith("inboxg:"):
+        from bot.handlers import inbox as IB
+        from bot.keyboards.inline import gallery_keyboard
+
+        uid = int(action.split(":", 1)[1])
+        rows = await db.media_in_thread(uid, 30)
+        await show(await IB.gallery_text(uid, lang),
+                   gallery_keyboard(lang, uid, rows))
+    elif action.startswith("inboxm:"):
+        from bot.handlers import inbox as IB
+
+        row_id = int(action.split(":", 1)[1])
+        # The panel is DM-only (guarded above), so the owner's user id IS the
+        # chat to deliver into — and it can't be None, unlike query.message.
+        err = await IB.send_logged_media(context, query.from_user.id,
+                                         row_id, lang)
+        await query.answer(err or get_text("INBOX_MEDIA_SENT", lang),
+                           show_alert=bool(err))
+    elif action == "inboxstar":
+        from bot.handlers import inbox as IB
+        from bot.keyboards.inline import starred_keyboard
+
+        rows = await db.starred_messages(30)
+        await show(await IB.starred_text(lang), starred_keyboard(lang, rows))
+    elif action == "inboxseenall":
+        from bot.handlers import inbox as IB
+        from bot.keyboards.inline import inbox_keyboard
+
+        # Mark every conversation read in one pass, then redraw the list.
+        for row in await db.recent_chats(500, 0):
+            await db.mark_seen(int(row["user_id"]))
+        rows = await db.recent_chats(IB.PAGE, 0)
+        await query.answer(get_text("INBOX_READALL_OK", lang))
+        await show(await IB.inbox_text(lang, 0),
+                   inbox_keyboard(lang, rows, 0, await db.count_chats()))
     elif action.startswith("inboxr:"):
         from bot.handlers import inbox as IB
 

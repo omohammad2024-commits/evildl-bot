@@ -212,14 +212,15 @@ async def probe_codecs(path: str) -> Dict[str, Any]:
     """
     info: Dict[str, Any] = {
         "vcodec": "", "acodec": "", "width": 0, "height": 0, "duration": 0,
-        "pix_fmt": "",
+        "pix_fmt": "", "sample_rate": 0,
     }
     try:
         code, out, _ = await _run(
             [
                 FFPROBE, "-v", "error",
                 "-show_entries",
-                "stream=codec_type,codec_name,width,height,pix_fmt:format=duration",
+                "stream=codec_type,codec_name,width,height,pix_fmt,sample_rate"
+                ":format=duration",
                 "-of", "json", path,
             ],
             timeout=60,
@@ -235,6 +236,10 @@ async def probe_codecs(path: str) -> Dict[str, Any]:
                 info["height"] = int(stream.get("height") or 0)
             elif stream.get("codec_type") == "audio" and not info["acodec"]:
                 info["acodec"] = (stream.get("codec_name") or "").lower()
+                try:
+                    info["sample_rate"] = int(stream.get("sample_rate") or 0)
+                except (TypeError, ValueError):
+                    pass
         try:
             info["duration"] = int(float(data.get("format", {}).get("duration") or 0))
         except (TypeError, ValueError):
@@ -283,8 +288,11 @@ async def ensure_ios_compatible(path: str) -> str:
     # H.264/HEVC stream is still "the right codec" but fails to open on many
     # iPhones, so treat an exotic pixel format as needing a re-encode too.
     pix_ok = (not info.get("pix_fmt")) or info["pix_fmt"] in config.IOS_PIX_FMTS
+    # 44.1k and 48k both play; anything else (e.g. Opus at 24k) gets normalised.
+    rate = info.get("sample_rate") or 0
+    rate_ok = (not rate) or rate in config.IOS_AUDIO_RATES_OK
 
-    if video_ok and audio_ok and pix_ok:
+    if video_ok and audio_ok and pix_ok and rate_ok:
         # Codecs are already iOS-friendly. One thing can still keep it from
         # opening on iPhone: moov atom at the tail. Fix that with a cheap
         # stream-copy remux, no re-encode.
@@ -292,43 +300,89 @@ async def ensure_ios_compatible(path: str) -> str:
             return await _remux_faststart(path)
         return path
 
+    audio_args = [
+        "-c:a", "aac", "-profile:a", "aac_low",
+        "-b:a", config.IOS_AUDIO_BITRATE,
+        "-ar", str(config.IOS_AUDIO_RATE), "-ac", "2",
+    ]
+    # Colour metadata: deliberately NOT tagged. The reference file that plays on
+    # both iPhone and Android carries color_space/transfer/primaries = unknown,
+    # so forcing explicit bt709 tags would deviate from the confirmed-good spec.
+    color_args: list = []
+
     pixels = (info["width"] or 0) * (info["height"] or 0)
     duration = info["duration"] or 0
     out = f"{os.path.splitext(path)[0]}_ios.mp4"
 
-    if video_ok:
+    if video_ok and pix_ok:
         # Only the audio is wrong. Copy the video stream through: cheap and lossless.
-        # Audio is normalised to the iOS reference profile: AAC-LC, 44.1kHz, stereo.
+        # Audio is normalised to the iOS reference profile: AAC-LC, 48kHz, stereo.
         cmd = [
-            FFMPEG, "-nostdin", "-y", "-i", path,
+            FFMPEG, "-nostdin", "-y",
+            "-threads", "1", "-i", path,
             "-c:v", "copy",
-            "-c:a", "aac", "-profile:a", "aac_low", "-b:a", "192k",
-            "-ar", "44100", "-ac", "2",
-            "-movflags", "+faststart", out,
+            *audio_args,
+            "-movflags", "+faststart",
+            "-max_muxing_queue_size", "64",
+            "-threads", "1", out,
         ]
         budget = 600
-        what = f"audio {acodec}->aac"
+        what = f"audio {acodec or 'none'}@{rate or '?'}->aac{config.IOS_AUDIO_RATE // 1000}k"
     else:
-        if pixels and pixels > config.IOS_COMPAT_MAX_PIXELS:
-            logger.info(
-                "iOS repair skipped for %s: %dx%d exceeds the pixel budget",
-                os.path.basename(path), info["width"], info["height"],
-            )
-            return path
         if duration and duration > config.IOS_COMPAT_MAX_DURATION:
             logger.info(
                 "iOS repair skipped for %s: %ds exceeds the duration budget",
                 os.path.basename(path), duration,
             )
             return path
+        # ALWAYS normalise the frame size on a re-encode, not just when over a
+        # budget. The reference file that plays on both platforms is 720x1280 and
+        # declares H.264 level 3.1, which only covers up to 720p — emitting a
+        # 1080p or 1440p stream with that level tag is out of spec and is one of
+        # the reasons iOS refused the file. The filter is expressed on the SHORT
+        # side so portrait (1440x2560 -> 720x1280) and landscape both work, and
+        # `-2` keeps the other dimension even, which H.264 requires. Videos
+        # already at or below the cap are left at their native size (the scale
+        # filter's min() keeps it from upscaling).
+        cap = config.IOS_COMPAT_SCALE_SHORT
+        vf = ["-vf", (
+            f"scale="
+            f"'if(gt(iw,ih),-2,min({cap},iw))'"
+            f":'if(gt(iw,ih),min({cap},ih),-2)'"
+        )]
+        if pixels and pixels > cap * cap * 4:
+            logger.info(
+                "iOS repair downscaling %s: %dx%d -> short side %d",
+                os.path.basename(path), info["width"], info["height"], cap,
+            )
+        # Thread discipline, learned the hard way: ffmpeg spawns SEPARATE thread
+        # pools for decoding, filtering, and encoding. Capping only the encoder
+        # (`-threads N` after the input) still let the vp9/h264 DECODER fan out
+        # across all 48 cores, and on a 1440x2560 source that pushed the process
+        # past the ~950MB cgroup limit — SIGKILL (exit -9) before a single frame
+        # was written, logged as "iOS repair failed". Measured on E_big10bit:
+        #   decode=auto encode=2 -> killed | decode=1 encode=1 filter=1 -> ok
+        # `-threads 1` BEFORE -i caps the decoder; the pair after the input caps
+        # the filter graph and the encoder.
         cmd = [
-            FFMPEG, "-nostdin", "-y", "-i", path,
-            "-c:v", "libx264", "-profile:v", "high", "-level", "4.0",
+            FFMPEG, "-nostdin", "-y",
+            "-threads", "1", "-i", path,
+            "-filter_threads", "1",
+            *vf,
+            "-c:v", "libx264",
+            "-profile:v", config.IOS_H264_PROFILE,
+            "-level", config.IOS_H264_LEVEL,
             "-preset", config.IOS_COMPAT_PRESET,
             "-crf", str(config.IOS_COMPAT_CRF), "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-profile:a", "aac_low", "-b:a", "192k",
-            "-ar", "44100", "-ac", "2",
-            "-movflags", "+faststart", "-threads", str(config.IOS_COMPAT_THREADS), out,
+            *color_args,
+            # Constant frame rate: a VFR source (common on Instagram) can make
+            # iOS refuse to play or desync audio.
+            "-fps_mode", "cfr",
+            "-x264-params", config.IOS_X264_PARAMS,
+            *audio_args,
+            "-movflags", "+faststart",
+            "-max_muxing_queue_size", "64",
+            "-threads", str(config.IOS_COMPAT_THREADS), out,
         ]
         # Allow generous headroom but never unbounded: a hung ffmpeg would
         # otherwise pin a worker forever.

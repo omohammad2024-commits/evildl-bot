@@ -147,6 +147,20 @@ IOS_AUDIO_CODECS = {"aac", "mp4a", "mp3", "alac"}
 # so it is re-encoded down to yuv420p.
 IOS_PIX_FMTS = {"yuv420p", "yuvj420p", "nv12"}
 
+# Target spec for delivered video — copied field-for-field from the reference
+# file the user confirmed plays on BOTH iPhone and Android:
+#   container mp4 (avc1) · H.264 High @ L3.1 · yuv420p · progressive · CFR
+#   audio AAC-LC · 44100 Hz · stereo · bt709 colour tags · faststart
+# Do not "improve" these numbers: 48kHz and level 4.0 were tried and the file
+# still failed to open on the user's iPhone. Match the reference exactly.
+IOS_AUDIO_RATE = int(os.getenv("IOS_AUDIO_RATE", "44100"))
+IOS_AUDIO_BITRATE = os.getenv("IOS_AUDIO_BITRATE", "128k")
+IOS_H264_PROFILE = os.getenv("IOS_H264_PROFILE", "high")
+IOS_H264_LEVEL = os.getenv("IOS_H264_LEVEL", "3.1")
+# Audio sample rates that are acceptable as-is (both play on iOS), so a file
+# already at one of these is not re-encoded purely to change the rate.
+IOS_AUDIO_RATES_OK = {44100, 48000}
+
 # Bounds on the expensive full-video transcode. This host has 48 CPU cores but
 # no usable GPU encoder (no nvidia-smi, no /dev/dri, h264_nvenc fails), so the
 # fallback is libx264 on CPU. Past these limits the original file is sent
@@ -155,14 +169,36 @@ IOS_COMPAT_MAX_PIXELS = int(os.getenv("IOS_COMPAT_MAX_PIXELS", str(1920 * 1080))
 IOS_COMPAT_MAX_DURATION = int(os.getenv("IOS_COMPAT_MAX_DURATION", "1800"))
 IOS_COMPAT_PRESET = os.getenv("IOS_COMPAT_PRESET", "veryfast")
 IOS_COMPAT_CRF = int(os.getenv("IOS_COMPAT_CRF", "23"))
+# When a re-encode is needed, normalise the SHORT side to this many pixels so
+# the output matches the reference file (720x1280 portrait). Two reasons this is
+# 720 and not 1080: the reference the user confirmed playing is 720x1280, and
+# H.264 level 3.1 — which the reference declares — only covers up to 720p. A
+# 1080p stream tagged as level 3.1 is out of spec and is one of the things that
+# made iOS refuse the file. Smaller frames also keep the encode inside the
+# container's memory limit.
+IOS_COMPAT_SCALE_SHORT = int(os.getenv("IOS_COMPAT_SCALE_SHORT", "720"))
 
 # libx264 thread cap. MUST be bounded: `-threads 0` lets x264 spawn one thread
 # per core (60 on this 48-core box) plus lookahead threads, each holding frame
 # buffers for a 1080p frame. Inside the ~950MB cgroup that overshoots RAM and
 # the kernel SIGKILLs ffmpeg (exit -9) before a single frame is written — which
-# is exactly why "iOS repair failed (vp9->h264)" kept firing. 4 threads encode a
-# 20s reel in a few seconds and stay well under the memory cap.
-IOS_COMPAT_THREADS = int(os.getenv("IOS_COMPAT_THREADS", "4"))
+# is exactly why "iOS repair failed (vp9->h264)" kept firing.
+#
+# Measured peak RSS on a 1080x1920 encode in this cgroup:
+#   threads=1 -> 367MB (3.8s) | threads=2 -> 432MB (2.3s)
+#   threads=4 -> 477MB (2.4s) | threads=8 -> OOM-killed
+# The cgroup limit is 953MB and Hermes itself already holds ~330MB, leaving
+# roughly 400-500MB of real headroom. 1 encoder thread is the safe default:
+# ffmpeg also runs decode and filter pools, and on a 1440x2560 source anything
+# above 1 pushed the total past the limit and got SIGKILLed. Encoding a 20s reel
+# still takes only a couple of seconds.
+IOS_COMPAT_THREADS = int(os.getenv("IOS_COMPAT_THREADS", "1"))
+
+# x264 tuning that trims encoder memory without hurting quality: a shorter
+# lookahead queue and no sync-lookahead thread means far fewer buffered frames.
+IOS_X264_PARAMS = os.getenv(
+    "IOS_X264_PARAMS", "rc-lookahead=10:sync-lookahead=0:bframes=2:b-adapt=1"
+)
 
 # curl_cffi impersonation targets, rotated on retry.
 IMPERSONATE_CHAIN = [c.strip() for c in os.getenv(

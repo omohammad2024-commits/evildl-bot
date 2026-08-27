@@ -331,6 +331,14 @@ def build_application():
     app.add_handler(CommandHandler("maintenance", maintenance_command))
     app.add_handler(CommandHandler("cookies", cookies_command))
     app.add_handler(CommandHandler("inbox", inbox_command))
+    # The inbox prints /m<id> and /s<id> codes next to each row (pull that
+    # message's media / toggle its star). A CommandHandler matches on an exact
+    # name, so these variable-suffix codes need a regex MessageHandler. Owner
+    # and DM checks live inside code_handler.
+    from bot.handlers.inbox import code_handler
+
+    app.add_handler(MessageHandler(
+        filters.Regex(r"^/[ms]\d+$") & filters.ChatType.PRIVATE, code_handler))
     from bot.handlers.tglogin import (
         tglogin_command, tglogout_command, tglogin_text,
     )

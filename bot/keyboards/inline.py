@@ -75,6 +75,10 @@ _ROLE_RULES = (
     ("a:inboxban", ("cancel", "fail")),
     ("a:inboxr", ("action", "invite")),
     ("a:inboxfind", ("menu", "search")),
+    ("a:inboxstar", ("menu", "star")),
+    ("a:inboxseenall", ("action", "ok")),
+    ("a:inboxg", ("menu", "media")),
+    ("a:inboxm", ("action", "")),
     ("a:inboxu", ("menu", "stats")),
     ("a:inboxt", ("nav", "")),
     ("a:inboxp", ("nav", "")),
@@ -635,13 +639,19 @@ def platforms_keyboard(lang: str, states: dict) -> InlineKeyboardMarkup:
 
 
 def inbox_keyboard(lang: str, rows: list, page: int, total: int) -> InlineKeyboardMarkup:
-    """Chat list: one button per conversation, then paging."""
+    """Chat list: one button per conversation, then paging and global actions.
+
+    The per-chat button carries the unread badge so the owner can see at a glance
+    which conversations are waiting, without opening each one.
+    """
     from bot.handlers.inbox import PAGE, _clip, _who
 
     buttons: list = []
     for row in rows:
+        unread = int(row.get("unread") or 0)
+        badge = f" 🔴{unread}" if unread else ""
         buttons.append([InlineKeyboardButton(
-            f"💬 {_clip(_who(row), 22)} · {row.get('total', 0)}",
+            f"💬 {_clip(_who(row), 20)} · {row.get('total', 0)}{badge}",
             callback_data=f"a:inbox:{row['user_id']}")])
     nav: list = []
     if page > 0:
@@ -655,8 +665,18 @@ def inbox_keyboard(lang: str, rows: list, page: int, total: int) -> InlineKeyboa
     buttons.append([
         InlineKeyboardButton(get_text("INBOX_BTN_SEARCH", lang),
                              callback_data="a:inboxfind"),
+        InlineKeyboardButton(get_text("INBOX_BTN_STARRED", lang),
+                             callback_data="a:inboxstar"),
+    ])
+    buttons.append([
+        InlineKeyboardButton(get_text("INBOX_BTN_READALL", lang),
+                             callback_data="a:inboxseenall"),
         InlineKeyboardButton(get_text("BTN_REFRESH", lang),
                              callback_data=f"a:inboxp:{page}"),
+    ])
+    buttons.append([
+        InlineKeyboardButton(get_text("INBOX_BTN_BROADCAST", lang),
+                             callback_data="a:bc"),
     ])
     buttons.append([
         InlineKeyboardButton(get_text("BTN_BACK", lang), callback_data="a:panel"),
@@ -667,12 +687,14 @@ def inbox_keyboard(lang: str, rows: list, page: int, total: int) -> InlineKeyboa
 
 def thread_keyboard(lang: str, user_id: int, page: int,
                     total: int) -> InlineKeyboardMarkup:
-    """One conversation: reply, paging, ban, back."""
+    """One conversation: reply, media gallery, paging, profile, ban, back."""
     from bot.handlers.inbox import THREAD_PAGE
 
     rows: list = [[
         InlineKeyboardButton(get_text("INBOX_BTN_REPLY", lang),
                              callback_data=f"a:inboxr:{user_id}"),
+        InlineKeyboardButton(get_text("INBOX_BTN_GALLERY", lang),
+                             callback_data=f"a:inboxg:{user_id}"),
     ]]
     nav: list = []
     if (page + 1) * THREAD_PAGE < total:
@@ -694,6 +716,55 @@ def thread_keyboard(lang: str, user_id: int, page: int,
         InlineKeyboardButton(get_text("BTN_CLOSE", lang), callback_data="x"),
     ])
     return InlineKeyboardMarkup(rows)
+
+
+def gallery_keyboard(lang: str, user_id: int, rows: list) -> InlineKeyboardMarkup:
+    """Media gallery: a button per file that re-sends it to the owner.
+
+    Buttons are laid out three per row and labelled with the kind icon plus the
+    row id, matching the ``/m<id>`` codes shown in the message body.
+    """
+    from bot.handlers.inbox import _KIND_ICON
+
+    buttons: list = []
+    line: list = []
+    for row in rows:
+        icon = _KIND_ICON.get(row.get("kind") or "document", "📎")
+        line.append(InlineKeyboardButton(
+            f"{icon} {row.get('id')}",
+            callback_data=f"a:inboxm:{row.get('id')}"))
+        if len(line) == 3:
+            buttons.append(line)
+            line = []
+    if line:
+        buttons.append(line)
+    buttons.append([
+        InlineKeyboardButton(get_text("BTN_BACK", lang),
+                             callback_data=f"a:inboxt:{user_id}:0"),
+        InlineKeyboardButton(get_text("BTN_CLOSE", lang), callback_data="x"),
+    ])
+    return InlineKeyboardMarkup(buttons)
+
+
+def starred_keyboard(lang: str, rows: list) -> InlineKeyboardMarkup:
+    """Starred list: jump to each message's thread, or pull its media."""
+    buttons: list = []
+    line: list = []
+    for row in rows:
+        if row.get("file_id"):
+            line.append(InlineKeyboardButton(
+                f"📎 {row.get('id')}",
+                callback_data=f"a:inboxm:{row.get('id')}"))
+            if len(line) == 3:
+                buttons.append(line)
+                line = []
+    if line:
+        buttons.append(line)
+    buttons.append([
+        InlineKeyboardButton(get_text("BTN_BACK", lang), callback_data="a:inboxp:0"),
+        InlineKeyboardButton(get_text("BTN_CLOSE", lang), callback_data="x"),
+    ])
+    return InlineKeyboardMarkup(buttons)
 
 
 async def group_welcome_keyboard(lang: str, bot_username: str) -> InlineKeyboardMarkup:

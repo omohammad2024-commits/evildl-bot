@@ -192,6 +192,15 @@ class Database:
     # every query touching them fails on an already-deployed database.
     _ADDED_COLUMNS = (
         ("groups", "configured", "INTEGER DEFAULT 0"),
+        # Inbox messenger upgrade. The original log stored only a text preview,
+        # so the owner could see "[photo]" but never the photo itself. Keeping
+        # the file_id means media can be re-sent on demand without the bot
+        # hoarding files on disk (file_ids stay valid indefinitely).
+        ("messages", "file_id", "TEXT"),
+        ("messages", "file_type", "TEXT"),
+        ("messages", "reply_to", "INTEGER"),
+        ("messages", "seen", "INTEGER DEFAULT 0"),
+        ("messages", "starred", "INTEGER DEFAULT 0"),
     )
 
     async def _migrate(self) -> None:
@@ -994,27 +1003,115 @@ class Database:
     # ── message log (owner-only inbox) ────────────────────────────────
     async def log_message(self, *, user_id: int, chat_id: int, chat_type: str,
                           msg_id: int, kind: str, text: str,
-                          direction: str = "in") -> None:
-        """Record one message so the owner can read the bot's private chats."""
+                          direction: str = "in",
+                          file_id: str = "", file_type: str = "",
+                          reply_to: int = 0) -> None:
+        """Record one message so the owner can read the bot's private chats.
+
+        ``file_id`` is stored for media so the owner can pull the actual photo,
+        video, or voice note back out of the inbox later. Telegram file_ids do
+        not expire, so this costs one text column instead of disk space.
+        """
         db = await self._ensure()
         await db.execute(
             "INSERT INTO messages (user_id, chat_id, chat_type, msg_id, "
-            "direction, kind, text) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "direction, kind, text, file_id, file_type, reply_to, seen) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (user_id, chat_id, chat_type, msg_id, direction, kind,
-             (text or "")[:600]),
+             (text or "")[:600], file_id or None, file_type or None,
+             reply_to or None, 1 if direction == "out" else 0),
         )
         await db.commit()
 
+    async def mark_seen(self, user_id: int) -> int:
+        """Mark a user's incoming messages as read. Returns rows touched."""
+        db = await self._ensure()
+        cur = await db.execute(
+            "UPDATE messages SET seen = 1 "
+            "WHERE user_id = ? AND direction = 'in' AND COALESCE(seen, 0) = 0",
+            (user_id,),
+        )
+        await db.commit()
+        return cur.rowcount or 0
+
+    async def unread_total(self) -> int:
+        """Unread incoming messages across every private chat."""
+        db = await self._ensure()
+        async with db.execute(
+            "SELECT COUNT(*) c FROM messages WHERE direction = 'in' "
+            "AND chat_type = 'private' AND COALESCE(seen, 0) = 0"
+        ) as cur:
+            row = await cur.fetchone()
+        return row["c"] if row else 0
+
+    async def toggle_star(self, msg_row_id: int) -> bool:
+        """Flip the star on one logged message. Returns the new state."""
+        db = await self._ensure()
+        async with db.execute(
+            "SELECT COALESCE(starred, 0) s FROM messages WHERE id = ?",
+            (msg_row_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return False
+        new = 0 if row["s"] else 1
+        await db.execute("UPDATE messages SET starred = ? WHERE id = ?",
+                         (new, msg_row_id))
+        await db.commit()
+        return bool(new)
+
+    async def starred_messages(self, limit: int = 30) -> List[Dict[str, Any]]:
+        """Every starred message, newest first — the owner's pinned shortlist."""
+        db = await self._ensure()
+        async with db.execute(
+            "SELECT m.*, u.username, u.first_name FROM messages m "
+            "LEFT JOIN users u ON u.user_id = m.user_id "
+            "WHERE COALESCE(m.starred, 0) = 1 ORDER BY m.id DESC LIMIT ?",
+            (limit,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def message_by_id(self, msg_row_id: int) -> Optional[Dict[str, Any]]:
+        db = await self._ensure()
+        async with db.execute(
+            "SELECT m.*, u.username, u.first_name FROM messages m "
+            "LEFT JOIN users u ON u.user_id = m.user_id WHERE m.id = ?",
+            (msg_row_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def media_in_thread(self, user_id: int, limit: int = 30) -> List[Dict[str, Any]]:
+        """Only the media a user sent, newest first — the thread's gallery."""
+        db = await self._ensure()
+        async with db.execute(
+            "SELECT * FROM messages WHERE user_id = ? "
+            "AND file_id IS NOT NULL AND file_id != '' "
+            "ORDER BY id DESC LIMIT ?",
+            (user_id, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
     async def recent_chats(self, limit: int = 12, offset: int = 0) -> List[Dict[str, Any]]:
-        """Users with recent traffic, newest first — the inbox list."""
+        """Users with recent traffic, newest first — the inbox list.
+
+        Carries unread count, last direction, and whether the last message had
+        media, so the list can render like a real messenger without N+1 queries.
+        """
         db = await self._ensure()
         sql = (
             "SELECT m.user_id, MAX(m.id) AS last_id, COUNT(*) AS total, "
             "       MAX(m.created_at) AS last_at, "
+            "       SUM(CASE WHEN m.direction = 'in' AND COALESCE(m.seen,0) = 0 "
+            "                THEN 1 ELSE 0 END) AS unread, "
             "       (SELECT text FROM messages x WHERE x.user_id = m.user_id "
             "        ORDER BY x.id DESC LIMIT 1) AS last_text, "
             "       (SELECT kind FROM messages x WHERE x.user_id = m.user_id "
             "        ORDER BY x.id DESC LIMIT 1) AS last_kind, "
+            "       (SELECT direction FROM messages x WHERE x.user_id = m.user_id "
+            "        ORDER BY x.id DESC LIMIT 1) AS last_dir, "
             "       u.username, u.first_name "
             "FROM messages m LEFT JOIN users u ON u.user_id = m.user_id "
             "WHERE m.chat_type = 'private' "

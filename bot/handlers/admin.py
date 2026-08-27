@@ -1096,7 +1096,9 @@ async def consume_pending_input(update: Update, context: ContextTypes.DEFAULT_TY
         from bot.handlers import inbox as IB
         from bot.keyboards.inline import thread_keyboard
 
-        reply = await IB.do_reply(context, int(uid), message.text or "", lang)
+        # Accept ANY message type as a reply — photo, voice, sticker, file —
+        # not just text. do_reply_media falls back to plain text on its own.
+        reply = await IB.do_reply_media(context, int(uid), message, lang)
         await message.reply_text(
             reply, parse_mode=ParseMode.HTML,
             reply_markup=thread_keyboard(lang, int(uid), 0,

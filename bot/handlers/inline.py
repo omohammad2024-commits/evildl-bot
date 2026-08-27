@@ -33,7 +33,13 @@ from telegram.ext import ContextTypes
 from bot import config
 from bot.database import db
 from bot.i18n import get_text
-from bot.utils.media_handler import delete_file, get_file_size
+from bot.utils.media_handler import (
+    delete_file,
+    ensure_ios_compatible,
+    get_file_size,
+    make_thumbnail,
+    probe_media,
+)
 from bot.utils.url_parser import detect_platform, extract_urls, get_service, platform_label
 
 logger = logging.getLogger(__name__)
@@ -49,6 +55,69 @@ async def _username(context) -> str:
         me = await context.bot.get_me()
         _BOT_USERNAME = me.username
     return _BOT_USERNAME
+
+
+async def _lang_for(user) -> str:
+    """The viewer's own language, not a hardcoded default.
+
+    Inline queries fire from any chat, so the stored user row is the best source.
+    Note ``db.get_user_language`` returns ``DEFAULT_LANG`` for a user it has
+    never seen, which makes it useless for telling "chose Persian" apart from
+    "unknown" — so the row itself is read here, and only a genuinely absent or
+    empty ``language`` falls through to the Telegram client's own language code.
+    Without this an English speaker tagging the bot in a group always got
+    Persian.
+    """
+    if user is None:
+        return config.DEFAULT_LANG
+    try:
+        row = await db.get_user(user.id)
+        if row and row.get("language"):
+            return str(row["language"])
+    except Exception as exc:
+        logger.debug("inline lang lookup failed: %s", exc)
+    code = (getattr(user, "language_code", "") or "").lower()
+    if code.startswith("fa") or code.startswith("pe"):
+        return "fa"
+    if code.startswith("en"):
+        return "en"
+    return config.DEFAULT_LANG
+
+
+def _fmt_duration(seconds: int) -> str:
+    """0:42 / 3:05 / 1:02:33 — the shape Telegram itself uses."""
+    seconds = int(seconds or 0)
+    if seconds <= 0:
+        return ""
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _build_caption(title: str, username: str, *, platform: str = "",
+                   size: int = 0, duration: int = 0) -> str:
+    """Caption for inline-delivered media.
+
+    Was just ``title + @handle``. Viewers in a group see this and have no other
+    context, so it now also carries the platform, duration, and size — the same
+    detail the private-chat caption gives — with the handle last so the bot's
+    attribution is the line people read on the way out.
+    """
+    from bot.utils.media_handler import human_size
+
+    lines = [title[:180]] if title else []
+    meta = []
+    if platform:
+        meta.append(platform)
+    dur = _fmt_duration(duration)
+    if dur:
+        meta.append(f"⏱ {dur}")
+    if size:
+        meta.append(f"📦 {human_size(size)}")
+    if meta:
+        lines.append(" · ".join(meta))
+    lines.append(f"@{username}")
+    return "\n\n".join(lines) if len(lines) > 1 else lines[0]
 
 
 def _deeplink(username: str, url: str) -> str:
@@ -76,7 +145,7 @@ async def inline_query_handler(update: Update,
     if not urls:
         # Guide the user instead of an empty box. No DB/network work here so the
         # box never spins while the user is still typing.
-        lang = "fa"
+        lang = await _lang_for(user)
         await query.answer(
             [
                 InlineQueryResultArticle(
@@ -96,7 +165,7 @@ async def inline_query_handler(update: Update,
     url = urls[0]
     platform = detect_platform(url)
     label = platform_label(platform)
-    lang = "fa"
+    lang = await _lang_for(user)
     results: List = []
 
     # Best case: we already have this file cached -> send it inline instantly.
@@ -104,6 +173,8 @@ async def inline_query_handler(update: Update,
     if cached and cached.get("file_id"):
         kind = cached.get("file_type")
         title = cached.get("title") or label
+        cap = _build_caption(title, username, platform=label,
+                             size=cached.get("file_size") or 0)
         try:
             if kind == "video":
                 results.append(
@@ -111,7 +182,8 @@ async def inline_query_handler(update: Update,
                         id="cached_v",
                         video_file_id=cached["file_id"],
                         title=title[:60],
-                        caption=f"{title[:200]}\n\n@{username}",
+                        description=get_text("INLINE_CACHED_DESC", lang),
+                        caption=cap,
                     )
                 )
             elif kind == "photo":
@@ -119,7 +191,7 @@ async def inline_query_handler(update: Update,
                     InlineQueryResultPhoto(
                         id="cached_p",
                         photo_file_id=cached["file_id"],
-                        caption=f"{title[:200]}\n\n@{username}",
+                        caption=cap,
                     )
                 )
         except Exception as exc:
@@ -187,7 +259,7 @@ async def chosen_inline_handler(update: Update,
         return
     url = urls[0]
     platform = detect_platform(url)
-    lang = "fa"
+    lang = await _lang_for(update.effective_user)
 
     async def _edit_text(key: str, **kw):
         try:
@@ -202,7 +274,9 @@ async def chosen_inline_handler(update: Update,
     if cached and cached.get("file_id"):
         await _edit_media_from_file_id(context, imid, cached["file_id"],
                                        cached.get("file_type", "video"),
-                                       cached.get("title") or platform_label(platform))
+                                       cached.get("title") or platform_label(platform),
+                                       platform=platform_label(platform),
+                                       size=cached.get("file_size") or 0)
         return
 
     service = get_service(platform)
@@ -243,8 +317,8 @@ async def chosen_inline_handler(update: Update,
 
         # 2. Upload once to the storage chat to mint a reusable file_id.
         title = result.title or platform_label(platform)
-        caption = f"{title[:180]}"
-        file_id, kind = await _mint_file_id(context, item.path, item.kind, caption)
+        file_id, kind = await _mint_file_id(context, item.path, item.kind,
+                                           title[:180])
         if not file_id:
             await _edit_text("INLINE_LIVE_FAIL")
             return
@@ -252,7 +326,9 @@ async def chosen_inline_handler(update: Update,
         # 3. Cache and edit the inline message into the real media.
         await db.put_cached(url, "best", file_id, kind, platform=platform,
                             title=title, file_size=size)
-        await _edit_media_from_file_id(context, imid, file_id, kind, title)
+        await _edit_media_from_file_id(context, imid, file_id, kind, title,
+                                       platform=platform_label(platform),
+                                       size=size)
     except Exception as exc:
         logger.warning("inline live fetch failed for %s: %s", url, exc)
         await _edit_text("INLINE_LIVE_FAIL")
@@ -262,12 +338,50 @@ async def chosen_inline_handler(update: Update,
 
 
 async def _mint_file_id(context, path: str, kind: str, caption: str):
-    """Upload the file once to the storage chat and return its Bot-API file_id."""
-    with open(path, "rb") as fh:
-        if kind == "video":
-            m = await context.bot.send_video(config.STORAGE_CHAT, video=fh,
-                                             caption=caption, supports_streaming=True)
+    """Upload the file once to the storage chat and return its Bot-API file_id.
+
+    This path bypasses ``sender.send_media`` entirely, so the iOS compatibility
+    repair has to be applied here too — otherwise inline results (the most used
+    entry point) ship raw VP9/AV1 that iPhones refuse to play.
+
+    Videos are uploaded with real width/height/duration and a generated
+    thumbnail. Without those Telegram renders the result as a generic file box
+    with no preview and the wrong aspect ratio, which is what made inline
+    results look worse than the same download in the private chat.
+    """
+    if kind == "video":
+        try:
+            path = await ensure_ios_compatible(path)
+        except Exception as exc:  # never block delivery on a repair failure
+            logger.warning("inline iOS repair skipped for %s: %s", path, exc)
+        meta = {}
+        thumb_path = None
+        try:
+            meta = await probe_media(path)
+            thumb_path = await make_thumbnail(path)
+        except Exception as exc:
+            logger.debug("inline video meta/thumb skipped: %s", exc)
+        try:
+            with open(path, "rb") as fh:
+                thumb_fh = open(thumb_path, "rb") if thumb_path else None
+                try:
+                    m = await context.bot.send_video(
+                        config.STORAGE_CHAT, video=fh, caption=caption,
+                        supports_streaming=True,
+                        width=meta.get("width") or None,
+                        height=meta.get("height") or None,
+                        duration=meta.get("duration") or None,
+                        thumbnail=thumb_fh,
+                    )
+                finally:
+                    if thumb_fh:
+                        thumb_fh.close()
             return (m.video.file_id if m.video else None), "video"
+        finally:
+            if thumb_path:
+                await delete_file(thumb_path)
+
+    with open(path, "rb") as fh:
         if kind == "photo":
             m = await context.bot.send_photo(config.STORAGE_CHAT, photo=fh,
                                              caption=caption)
@@ -282,9 +396,10 @@ async def _mint_file_id(context, path: str, kind: str, caption: str):
 
 
 async def _edit_media_from_file_id(context, imid: str, file_id: str,
-                                   kind: str, title: str) -> None:
+                                   kind: str, title: str, *,
+                                   platform: str = "", size: int = 0) -> None:
     username = await _username(context)
-    caption = f"{title[:180]}\n\n@{username}"
+    caption = _build_caption(title, username, platform=platform, size=size)
     media = None
     if kind == "video":
         media = InputMediaVideo(file_id, caption=caption)
@@ -293,7 +408,7 @@ async def _edit_media_from_file_id(context, imid: str, file_id: str,
     if media is None:
         try:
             await context.bot.edit_message_text(
-                f"{title}\n\n@{username}", inline_message_id=imid)
+                caption, inline_message_id=imid)
         except Exception:
             pass
         return
