@@ -129,6 +129,13 @@ YT_CLIENT_CHAIN = [c.strip() for c in os.getenv(
 # slow to fetch/upload and stream poorly on Telegram.
 BEST_MAX_HEIGHT = int(os.getenv("BEST_MAX_HEIGHT", "1080"))
 
+# Smart quality menu: the size a download should ideally stay under, used to mark
+# one tier as ⭐ recommended. Not a hard limit — anything up to MAX_UPLOAD is
+# still offered, this only decides which tier gets the star. Tuned so a full
+# video defaults to something that actually arrives in reasonable time on a
+# phone connection rather than the largest tier that technically fits.
+QUALITY_COMFORT_BYTES = int(os.getenv("QUALITY_COMFORT_MB", "150")) * 1024 * 1024
+
 # ── iOS playback compatibility ────────────────────────────────────────
 # iPhone/QuickTime plays H.264 video with AAC audio. YouTube serves VP9/AV1
 # above 1080p and Opus audio on most modern streams; such a file is named .mp4,

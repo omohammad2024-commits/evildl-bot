@@ -9,6 +9,7 @@ Reliability notes learned from live testing:
 """
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 import yt_dlp
@@ -31,6 +32,36 @@ class YouTubeDownloader(YtDlpDownloader):
         r"(?:^|\.|//)youtu\.be/",
     ]
     qualities = ["360", "480", "720", "1080", "mp3"]
+
+    # ── shorts vs full videos ─────────────────────────────────────────
+    # A Short is a different product from a normal upload: it is short, vertical,
+    # and the viewer never picks a resolution. Asking "which quality?" for a 30s
+    # clip is friction, so Shorts skip the menu and take the best rendition.
+    # Full videos keep the menu because a 1080p hour-long upload is hundreds of
+    # megabytes and the user should decide.
+    SHORT_MAX_DURATION = 180
+
+    @staticmethod
+    def is_short_url(url: str) -> bool:
+        """True when the LINK itself says Short — instant, no network call."""
+        return bool(re.search(r"/shorts/", url, re.I))
+
+    @classmethod
+    def looks_like_short(cls, info: Dict[str, Any]) -> bool:
+        """Decide from probed metadata, for links that hide their nature.
+
+        A Short shared via ``youtu.be/<id>`` or ``watch?v=<id>`` carries no
+        ``/shorts/`` marker, so the URL test alone would drop it into the menu
+        path. Two signals together are reliable: short duration AND a portrait
+        frame. Either one on its own is not — plenty of normal uploads are under
+        three minutes, and vertical full videos exist too.
+        """
+        duration = int(info.get("duration") or 0)
+        if not duration or duration > cls.SHORT_MAX_DURATION:
+            return False
+        w = int(info.get("width") or 0)
+        h = int(info.get("height") or 0)
+        return bool(w and h and h > w)
 
     def format_selector(self, quality: str) -> str:
         if quality == "mp3":
@@ -70,6 +101,17 @@ class YouTubeDownloader(YtDlpDownloader):
                 return h or w or 0
 
             labels = sorted({short_side(f) for f in formats if short_side(f)})
+            # The frame size of the best video rendition — used to tell a Short
+            # (portrait) from a normal upload when the URL doesn't say.
+            best_v = None
+            for f in formats:
+                if f.get("vcodec") in (None, "none"):
+                    continue
+                if best_v is None or short_side(f) > short_side(best_v):
+                    best_v = f
+            top_w = int((best_v or {}).get("width") or info.get("width") or 0)
+            top_h = int((best_v or {}).get("height") or info.get("height") or 0)
+
             for h in STANDARD_HEIGHTS:
                 if not any(lbl >= h for lbl in labels):
                     continue
@@ -88,7 +130,33 @@ class YouTubeDownloader(YtDlpDownloader):
                     size += int(best_audio * 125 * duration)
                 options.append({"quality": str(h), "height": h, "size": size})
 
+            # Smart menu, part 1: drop tiers this bot physically cannot deliver.
+            # Offering "1080p · 1.4GB" when the upload ceiling is 2GB-but-really
+            # 50MB without MTProto just produces a failure after a long wait.
+            # A tier with no size estimate is kept — unknown is not too big.
+            cap = config.MAX_UPLOAD
+            usable = [o for o in options if not o["size"] or o["size"] <= cap]
+            # Never present an empty menu: if every tier is over the cap, keep
+            # the smallest so the user still has one honest choice.
+            if options and not usable:
+                usable = [min(options, key=lambda o: o["size"] or 0)]
+            options = usable
+
+            # Smart menu, part 2: mark the tier worth defaulting to — the highest
+            # that still lands under the "comfortable" size. The keyboard renders
+            # this with a ⭐ so the user has guidance instead of four bare numbers.
+            comfort = min(cap, config.QUALITY_COMFORT_BYTES)
+            best_pick = ""
+            for o in options:
+                if not o["size"] or o["size"] <= comfort:
+                    best_pick = o["quality"]
+            if not best_pick and options:
+                best_pick = options[0]["quality"]
+            for o in options:
+                o["recommended"] = (o["quality"] == best_pick)
+
             audio_size = int(best_audio * 125 * duration) if (best_audio and duration) else 0
+            top_short_side = min(top_w, top_h) if (top_w and top_h) else (top_h or top_w)
             return {
                 "title": info.get("title") or "",
                 "uploader": info.get("uploader") or info.get("channel") or "",
@@ -100,6 +168,12 @@ class YouTubeDownloader(YtDlpDownloader):
                 "options": options,
                 "audio_size": audio_size,
                 "heights": labels,
+                "width": top_w,
+                "height": top_h,
+                # Highest real quality available, as a quality label. Shorts are
+                # downloaded at exactly this instead of the generic "best".
+                "top_quality": str(top_short_side) if top_short_side else "best",
+                "recommended": best_pick,
             }
 
         return await with_retries(attempt, platform=self.name)

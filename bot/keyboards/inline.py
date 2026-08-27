@@ -388,7 +388,13 @@ def history_keyboard(entries: List[Dict[str, Any]], tokens: List[str],
 
 def quality_keyboard(token: str, options: List[Dict[str, Any]], lang: str,
                      audio_size: int = 0) -> InlineKeyboardMarkup:
-    """Quality picker with real size estimates, two buttons per row."""
+    """Quality picker with real size estimates, two buttons per row.
+
+    Options are pre-filtered by the service so nothing unsendable is shown, and
+    one entry may carry ``recommended`` — that one gets a ⭐ so the user has a
+    steer instead of four bare numbers. The star is the only difference; every
+    listed tier remains selectable.
+    """
     labels = {360: "QUALITY_360", 480: "QUALITY_480", 720: "QUALITY_720",
               1080: "QUALITY_1080"}
     row: List[InlineKeyboardButton] = []
@@ -399,6 +405,8 @@ def quality_keyboard(token: str, options: List[Dict[str, Any]], lang: str,
         label = get_text(key, lang) if key else f"{h}p"
         if opt.get("size"):
             label = f"{label} · {human_size(opt['size'])}"
+        if opt.get("recommended"):
+            label = f"⭐ {label}"
         row.append(InlineKeyboardButton(label, callback_data=f"q:{token}:{opt['quality']}"))
         if len(row) == 2:
             rows.append(row)

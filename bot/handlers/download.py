@@ -349,6 +349,20 @@ async def process_url(
                 lang=lang, status=status,
             )
 
+    # YouTube Shorts: no quality menu. A Short is a vertical clip of at most a
+    # few minutes and the viewer never picks a resolution on YouTube itself, so
+    # asking here is pure friction — send the best rendition straight away.
+    # A normal upload keeps the menu (see _offer_quality) because 1080p of an
+    # hour-long video is hundreds of megabytes and that must stay the user's
+    # decision.
+    if (not quality and platform == "youtube"
+            and getattr(service, "is_short_url", None)
+            and service.is_short_url(url)):
+        return await run_download(
+            update, context, url, platform=platform, quality="best",
+            lang=lang, status=status,
+        )
+
     # Offer a quality menu for any platform that declares qualities and can
     # probe them. YouTube and TikTok qualify; platforms with a single usable
     # resolution return no options and fall through to a direct download.
@@ -388,6 +402,22 @@ async def _offer_quality(update, context, url, platform, service, lang, status) 
     if not info.get("options"):
         await _safe_delete(note)
         return False
+
+    # A Short shared as youtu.be/<id> or watch?v=<id> carries no /shorts/ marker,
+    # so the URL check upstream could not catch it. Now that the probe is done we
+    # know its duration and frame shape: if it is really a Short, skip the menu
+    # and take the highest quality the probe actually found. `top_quality` is a
+    # concrete tier (e.g. "1080") rather than the generic "best", so the pick is
+    # the real ceiling of THIS video, not the platform default.
+    if (platform == "youtube" and getattr(service, "looks_like_short", None)
+            and service.looks_like_short(info)):
+        logger.info("youtube: %s detected as a Short (%ss, %sx%s) — skipping menu",
+                    url, info.get("duration"), info.get("width"), info.get("height"))
+        await _safe_delete(note)
+        return await run_download(
+            update, context, url, platform=platform,
+            quality=info.get("top_quality") or "best", lang=lang,
+        )
 
     token = jobs.put(Job(url=url, platform=platform, user_id=user.id,
                          chat_id=message.chat_id, title=info.get("title", ""),
