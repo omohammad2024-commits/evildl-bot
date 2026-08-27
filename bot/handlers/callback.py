@@ -522,7 +522,9 @@ async def _deliver_single(update, context, result, platform, note, lang) -> None
             kind=item.kind, filename=item.filename,
             performer=result.uploader, title=result.title,
         )
-        await db.add_download(update.effective_user.id, platform, item.path, size, 1)
+        await db.add_download(update.effective_user.id, platform, item.path, size, 1,
+                             chat_type=update.effective_chat.type
+                             if update.effective_chat else "private")
         try:
             await note.delete()
         except Exception:

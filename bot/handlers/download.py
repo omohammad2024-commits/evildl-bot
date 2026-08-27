@@ -298,7 +298,8 @@ async def process_url(
         if sent is not None:
             if status:
                 await _safe_delete(status)
-            await db.add_download(user.id, platform, url, cached.get("file_size", 0), 1)
+            await db.add_download(user.id, platform, url, cached.get("file_size", 0), 1,
+                                  chat_type=message.chat.type)
             # Group bookkeeping applies to cache hits too — otherwise a group's
             # counter only moves on cold downloads and clean-mode leaves the
             # trigger message behind whenever the file was already cached.
@@ -510,7 +511,8 @@ async def run_download(
         logger.error("disk full: %s", exc)
         if note is not None:
             await _edit(note, get_text("ERROR_GENERIC", lang))
-        await db.add_download(user.id, platform, url, 0, 0, str(exc))
+        await db.add_download(user.id, platform, url, 0, 0, str(exc),
+                              chat_type=message.chat.type)
         return False
     except Exception as exc:
         msg = _clean_error(exc)
@@ -521,11 +523,14 @@ async def run_download(
         if msg == "__STORY_NEEDS_LOGIN__":
             if note is not None:
                 await _edit(note, get_text("STORY_NEEDS_LOGIN", lang))
-            await db.add_download(user.id, platform, url, 0, 0, "telegram story: no user session")
+            await db.add_download(user.id, platform, url, 0, 0,
+                                  "telegram story: no user session",
+                                  chat_type=message.chat.type)
             return False
         logger.warning("download failed [%s] %s: %s", platform, url[:80], msg)
         await db.add_download(user.id, platform, url, 0, 0, msg,
-                              int((time.time() - started) * 1000))
+                              int((time.time() - started) * 1000),
+                              chat_type=message.chat.type)
         if note is not None:
             await _edit(note, get_text("DOWNLOAD_FAILED", lang, error=msg,
                                        hint=_hint_for(msg, lang)))
@@ -539,7 +544,8 @@ async def run_download(
                 await _edit(note, body)
             else:
                 await message.reply_text(body, parse_mode="HTML")
-            await db.add_download(user.id, platform, url, 0, 1)
+            await db.add_download(user.id, platform, url, 0, 1,
+                                  chat_type=message.chat.type)
             return True
         if note is not None:
             await _edit(note, get_text("DOWNLOAD_FAILED", lang, error="no media",
@@ -594,7 +600,8 @@ async def run_download(
                 )
 
         await db.add_download(user.id, platform, url, total_size, 1,
-                              "", int((time.time() - started) * 1000))
+                              "", int((time.time() - started) * 1000),
+                              chat_type=message.chat.type)
         # Group bookkeeping + noise control: count the download against the group
         # and, when clean mode is on, remove the trigger message too so the chat
         # is left with just the delivered file.
@@ -628,7 +635,8 @@ async def run_download(
     except Exception as exc:
         msg = _clean_error(exc)
         logger.error("upload failed [%s]: %s", platform, msg)
-        await db.add_download(user.id, platform, url, total_size, 0, msg)
+        await db.add_download(user.id, platform, url, total_size, 0, msg,
+                              chat_type=message.chat.type)
         if note is not None:
             await _edit(note, get_text("DOWNLOAD_FAILED", lang, error=msg,
                                        hint=get_text("HINT_RETRY", lang)))

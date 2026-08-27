@@ -208,5 +208,6 @@ async def host_message(update: Update, context: ContextTypes.DEFAULT_TYPE,
             get_text("F2L_DONE", lang, name=fname[:60], size=real_size,
                      url=hosted.url) + expiry, reply_markup=kb)
 
-    await db.add_download(user.id, "filehost", fname, hosted.size, 1)
+    await db.add_download(user.id, "filehost", fname, hosted.size, 1,
+                          chat_type=message.chat.type)
     logger.info("file-to-link: %s hosted %s (%s)", user.id, fname, real_size)

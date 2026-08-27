@@ -18,6 +18,13 @@ Why this is a queue and not a plain ``send_message`` at each event site:
 The feed deliberately carries no media — only text and buttons. ``/data`` is a
 434MB volume, so re-sending files here is not an option; the buttons link back
 into the inbox, where the stored ``file_id`` can pull the real file on demand.
+
+**Private chats only.** Group traffic never reaches the feed. The bot sits in
+groups where people talk all day, and relaying that would bury the owner in
+noise. Group messages are still written to the inbox log, so history stays
+searchable — only the push is suppressed. The gate lives at each notify site
+(``inbox.record`` checks ``chat.type``, ``db.add_download`` takes a ``chat_type``
+argument) rather than here, because this module never sees the update.
 """
 import asyncio
 import logging
@@ -50,7 +57,6 @@ _ICON = {
     "failed": "❌",
     "media": "📎",
     "inline": "⚡",
-    "group": "👥",
 }
 
 

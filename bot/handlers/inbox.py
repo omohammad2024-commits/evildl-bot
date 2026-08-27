@@ -139,17 +139,19 @@ async def record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             text=_preview(message, kind), direction="in",
             file_id=file_id, file_type=file_type, reply_to=reply_to)
 
-        # Push it to the owner's live feed. This handler already sees EVERY
-        # incoming message from every user, so it is the one place that covers
-        # the whole surface — no need to touch individual command handlers.
-        from bot.utils import livefeed
+        # Push it to the owner's live feed — PRIVATE chats only. Group traffic is
+        # deliberately excluded: the bot sits in groups where people talk all day,
+        # and relaying that would bury the feed in noise the owner did not ask
+        # for. The message is still LOGGED above (so group history stays
+        # searchable); only the push notification is suppressed.
+        if chat.type == "private":
+            from bot.utils import livefeed
 
-        livefeed.notify(
-            "group" if chat.type in ("group", "supergroup") else (
-                "media" if file_id else "message"),
-            user_id=user.id, name=user.first_name or "",
-            username=user.username or "",
-            detail=_preview(message, kind))
+            livefeed.notify(
+                "media" if file_id else "message",
+                user_id=user.id, name=user.first_name or "",
+                username=user.username or "",
+                detail=_preview(message, kind))
     except Exception as exc:  # logging must never break the bot
         logger.debug("inbox record skipped: %s", exc)
 

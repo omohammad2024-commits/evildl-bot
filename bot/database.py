@@ -482,7 +482,15 @@ class Database:
         success: int = 1,
         error: str = "",
         duration_ms: int = 0,
+        chat_type: str = "private",
     ) -> None:
+        """Record a finished download.
+
+        ``chat_type`` exists only to gate the live feed: links posted in a group
+        still auto-download there, and the owner does not want a notification for
+        group traffic. It is not stored — the ``downloads`` table has no such
+        column and the statistics never needed it.
+        """
         db = await self._ensure()
         # Store only a short URL prefix; the full string is not worth the space.
         await db.execute(
@@ -508,22 +516,24 @@ class Database:
 
         # Live feed: every finished download passes through here, success or
         # failure, so this single hook covers all 13 platforms without touching
-        # each service module.
-        try:
-            from bot.utils import livefeed
+        # each service module. Private chats only — a link dropped in a group
+        # still downloads, but the owner does not want to hear about it.
+        if chat_type == "private":
+            try:
+                from bot.utils import livefeed
 
-            row = await self.get_user(user_id) or {}
-            size_mb = f" · {file_size / 1048576:.1f}MB" if file_size else ""
-            livefeed.notify(
-                "download" if success else "failed",
-                user_id=user_id,
-                name=row.get("first_name") or "",
-                username=row.get("username") or "",
-                platform=platform,
-                detail=(url[:60] + size_mb) if success
-                else (error[:80] or "failed"))
-        except Exception:
-            pass  # the feed is never allowed to affect a download
+                row = await self.get_user(user_id) or {}
+                size_mb = f" · {file_size / 1048576:.1f}MB" if file_size else ""
+                livefeed.notify(
+                    "download" if success else "failed",
+                    user_id=user_id,
+                    name=row.get("first_name") or "",
+                    username=row.get("username") or "",
+                    platform=platform,
+                    detail=(url[:60] + size_mb) if success
+                    else (error[:80] or "failed"))
+            except Exception:
+                pass  # the feed is never allowed to affect a download
 
     async def _bump(self, key: str, amount: int, conn=None) -> None:
         """Increment a counter stored in the settings table."""
