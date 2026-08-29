@@ -32,6 +32,22 @@ REQUIRED: Dict[str, List[str]] = {
     "twitter": ["auth_token"],
 }
 
+# First-party YouTube/Google session cookies. Any ONE of these proves the jar
+# was exported from a signed-in youtube.com session and is an acceptable stand-in
+# for the classic SID/HSID/SSID trio.
+#
+# Deliberately excludes every ``__Secure-3P*`` name: those are the THIRD-PARTY
+# variants Google sets for embedded contexts. A jar containing only 3P cookies
+# looks plausible (right domain, long expiry, ~15 cookies) but youtube.com treats
+# it as anonymous — verified by fetching youtube.com with such a jar and finding
+# ``LOGGED_IN false`` in the page.
+YT_FIRST_PARTY_AUTH = frozenset({
+    "SID",
+    "__Secure-1PSID",
+    "__Secure-1PAPISID",
+    "LOGIN_INFO",
+})
+
 # Which domains we expect to see, used to reject a file pasted for the wrong site.
 DOMAINS: Dict[str, Tuple[str, ...]] = {
     "youtube": ("youtube.com", "google.com"),
@@ -147,8 +163,18 @@ def validate(text: str, platform: str) -> Tuple[bool, str, Dict[str, object]]:
     names = {c["name"] for c in cookies}
     missing = [n for n in REQUIRED.get(platform, []) if n not in names]
     # YouTube accepts either the classic SID trio or the newer __Secure-* set.
+    #
+    # CAREFUL: the accepted substitute must be a FIRST-PARTY auth cookie.
+    # A previous version accepted any name matching ``__Secure-*PSID*``, which
+    # let a jar containing only ``__Secure-3PSID`` pass. The ``3P`` cookies are
+    # the *third-party* variants: Google sends them to embedded players, and a
+    # jar holding only those is anonymous as far as youtube.com is concerned.
+    # The result was the worst possible failure mode — /cookies reported a
+    # healthy green jar with 179 days left, while every YouTube download died
+    # with "Sign in to confirm you're not a bot" and nothing pointed at the
+    # cookies. Require a real first-party session cookie instead.
     if platform == "youtube" and missing:
-        if any(n.startswith("__Secure-") and "PSID" in n for n in names):
+        if names & YT_FIRST_PARTY_AUTH:
             missing = []
 
     now = time.time()

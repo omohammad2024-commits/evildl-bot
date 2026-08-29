@@ -98,6 +98,10 @@ HINT_LIVE = "Live streams can't be downloaded."
 HINT_LOGIN = "This content requires a login."
 HINT_RESTRICTED = "This post is age- or audience-restricted, so it isn't visible to everyone."
 HINT_BLOCKED = "This platform is currently refusing requests from the server. Try again later."
+HINT_YT_COOKIE = (
+    "YouTube requires a signed-in cookie from this server. YouTube downloads "
+    "won't work until the admin installs one — retrying will not help."
+)
 
 BANNED_MESSAGE = "🚫 Your access to this bot has been restricted."
 JOIN_CHANNEL = (

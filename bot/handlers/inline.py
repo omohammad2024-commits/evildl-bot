@@ -20,8 +20,15 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InlineQueryResultArticle,
-    InlineQueryResultVideo,
-    InlineQueryResultPhoto,
+    # The Cached* variants are the ONLY ones that take a Telegram file_id; the
+    # plain InlineQueryResultVideo/Photo describe a remote URL instead.
+    InlineQueryResultCachedAudio,
+    InlineQueryResultCachedMpeg4Gif,
+    InlineQueryResultCachedPhoto,
+    InlineQueryResultCachedVideo,
+    InputMediaAnimation,
+    InputMediaAudio,
+    InputMediaDocument,
     InputMediaPhoto,
     InputMediaVideo,
     InputTextMessageContent,
@@ -102,13 +109,20 @@ def _build_caption(title: str, username: str, *, platform: str = "",
     context, so it now also carries the platform, duration, and size — the same
     detail the private-chat caption gives — with the handle last so the bot's
     attribution is the line people read on the way out.
+
+    The title is HTML-escaped: these captions are sent with ``parse_mode=HTML``,
+    and post titles regularly contain ``&`` or ``<`` (an Instagram caption with
+    "Q&A" is enough). Unescaped, Telegram rejects the whole result with
+    "can't parse entities" and the media silently never arrives.
     """
+    from html import escape
+
     from bot.utils.media_handler import human_size
 
-    lines = [title[:180]] if title else []
+    lines = [escape(title[:180])] if title else []
     meta = []
     if platform:
-        meta.append(platform)
+        meta.append(escape(platform))
     dur = _fmt_duration(duration)
     if dur:
         meta.append(f"⏱ {dur}")
@@ -116,7 +130,7 @@ def _build_caption(title: str, username: str, *, platform: str = "",
         meta.append(f"📦 {human_size(size)}")
     if meta:
         lines.append(" · ".join(meta))
-    lines.append(f"@{username}")
+    lines.append(f"@{escape(username)}")
     return "\n\n".join(lines) if len(lines) > 1 else lines[0]
 
 
@@ -176,26 +190,54 @@ async def inline_query_handler(update: Update,
         cap = _build_caption(title, username, platform=label,
                              size=cached.get("file_size") or 0)
         try:
+            # MUST be the Cached* classes. InlineQueryResultVideo /
+            # InlineQueryResultPhoto describe a file by URL and do not accept a
+            # file_id at all — passing video_file_id there raises TypeError,
+            # which the except below swallowed, so the instant cached result was
+            # silently never offered and every tag fell through to the slow
+            # "live" path that re-downloads and edits the message.
             if kind == "video":
                 results.append(
-                    InlineQueryResultVideo(
+                    InlineQueryResultCachedVideo(
                         id="cached_v",
                         video_file_id=cached["file_id"],
                         title=title[:60],
                         description=get_text("INLINE_CACHED_DESC", lang),
                         caption=cap,
+                        parse_mode=ParseMode.HTML,
                     )
                 )
             elif kind == "photo":
                 results.append(
-                    InlineQueryResultPhoto(
+                    InlineQueryResultCachedPhoto(
                         id="cached_p",
                         photo_file_id=cached["file_id"],
                         caption=cap,
+                        parse_mode=ParseMode.HTML,
+                    )
+                )
+            elif kind == "audio":
+                results.append(
+                    InlineQueryResultCachedAudio(
+                        id="cached_a",
+                        audio_file_id=cached["file_id"],
+                        caption=cap,
+                        parse_mode=ParseMode.HTML,
+                    )
+                )
+            elif kind == "animation":
+                results.append(
+                    InlineQueryResultCachedMpeg4Gif(
+                        id="cached_g",
+                        mpeg4_file_id=cached["file_id"],
+                        caption=cap,
+                        parse_mode=ParseMode.HTML,
                     )
                 )
         except Exception as exc:
-            logger.debug("inline cached result build failed: %s", exc)
+            # Log at WARNING, not debug: this silently disabled the whole cached
+            # inline path once already.
+            logger.warning("inline cached result build failed (%s): %s", kind, exc)
 
     # Live media path: attach an inline keyboard so Telegram returns an
     # inline_message_id we can later edit in place with the real file.
@@ -398,21 +440,43 @@ async def _mint_file_id(context, path: str, kind: str, caption: str):
 async def _edit_media_from_file_id(context, imid: str, file_id: str,
                                    kind: str, title: str, *,
                                    platform: str = "", size: int = 0) -> None:
+    """Turn the placeholder inline message into the real media.
+
+    Three things here were wrong and are worth keeping straight:
+
+    * ``parse_mode`` MUST be set on the InputMedia and on the text fallback.
+      ``_build_caption`` HTML-escapes the title, so without it a caption
+      containing ``&`` rendered literally as ``&amp;`` in the chat.
+    * animation and audio were not handled, so a GIF or an audio post silently
+      degraded to a plain text message instead of the file.
+    * the failure was logged at debug level, i.e. invisible in production.
+    """
     username = await _username(context)
     caption = _build_caption(title, username, platform=platform, size=size)
     media = None
     if kind == "video":
-        media = InputMediaVideo(file_id, caption=caption)
+        media = InputMediaVideo(file_id, caption=caption,
+                                parse_mode=ParseMode.HTML)
     elif kind == "photo":
-        media = InputMediaPhoto(file_id, caption=caption)
+        media = InputMediaPhoto(file_id, caption=caption,
+                                parse_mode=ParseMode.HTML)
+    elif kind == "animation":
+        media = InputMediaAnimation(file_id, caption=caption,
+                                    parse_mode=ParseMode.HTML)
+    elif kind == "audio":
+        media = InputMediaAudio(file_id, caption=caption,
+                                parse_mode=ParseMode.HTML)
+    elif kind == "document":
+        media = InputMediaDocument(file_id, caption=caption,
+                                   parse_mode=ParseMode.HTML)
     if media is None:
         try:
             await context.bot.edit_message_text(
-                caption, inline_message_id=imid)
-        except Exception:
-            pass
+                caption, inline_message_id=imid, parse_mode=ParseMode.HTML)
+        except Exception as exc:
+            logger.warning("inline text fallback failed: %s", exc)
         return
     try:
         await context.bot.edit_message_media(media=media, inline_message_id=imid)
     except Exception as exc:
-        logger.debug("edit_message_media failed: %s", exc)
+        logger.warning("inline edit_message_media failed (%s): %s", kind, exc)

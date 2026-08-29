@@ -49,7 +49,7 @@ def is_admin(user_id: int) -> bool:
 
 
 # ── error translation ─────────────────────────────────────────────────
-def _hint_for(error: str, lang: str) -> str:
+def _hint_for(error: str, lang: str, platform: str = "") -> str:
     """Pick advice that is actually true for the failure.
 
     Ordering matters: restriction and rate-limit checks come before the generic
@@ -70,6 +70,17 @@ def _hint_for(error: str, lang: str) -> str:
     # by retrying immediately).
     if any(k in e for k in ("not a bot", "empty media response", "403 blocked",
                             "too many requests", "429", "rate limit")):
+        # YouTube's bot check is a special case: on a datacenter IP it is not
+        # transient at all, and NO client rotation gets past it — verified across
+        # all 16 player clients, with and without cookies. The only lever is a
+        # signed-in cookie jar. So when the jar is missing or not a real
+        # first-party login, say that plainly instead of "try again later",
+        # which would have the user retrying forever.
+        if platform == "youtube":
+            from bot.utils import cookies as cookie_jar
+
+            if not cookie_jar.get("youtube"):
+                return get_text("HINT_YT_COOKIE", lang)
         return get_text("HINT_BLOCKED", lang)
     if any(k in e for k in ("private", "login", "sign in", "authentication", "cookies")):
         return get_text("HINT_LOGIN", lang)
@@ -568,7 +579,7 @@ async def run_download(
                               chat_type=message.chat.type)
         if note is not None:
             await _edit(note, get_text("DOWNLOAD_FAILED", lang, error=msg,
-                                       hint=_hint_for(msg, lang)))
+                                       hint=_hint_for(msg, lang, platform)))
         return False
 
     # Text-only posts (e.g. a tweet with no media).
